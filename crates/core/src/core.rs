@@ -19,6 +19,8 @@ const KEK_INFO: &[u8] = b"opfs-webauthn/v1/kek";
 /// Anchors the wrap to the protocol version so a future major change
 /// invalidates old wrapped DEKs by design.
 const DEK_WRAP_AAD: &[u8] = b"opfs-webauthn/v1/dek-wrap";
+/// Expected length of the `WebAuthn` PRF output, in bytes (W3C webauthn-3 §10.1.2).
+const PRF_OUTPUT_LEN: usize = 32;
 
 /// Trait used by the wasm-bindgen wrapper to turn a typed error into
 /// the string a `JsError` will surface. Avoids dragging `std::fmt`
@@ -29,11 +31,12 @@ pub trait DisplayError {
 
 #[derive(Debug)]
 pub enum VaultError {
+    BadPrfOutputLength { got: usize },
     BadWrapNonceLength { got: usize },
     BadWrappedDekLength { got: usize, expected: usize },
     BadRowNonceLength { got: usize },
     Hkdf,
-    Aead,
+    Aead(AeadError),
     Key(KeyError),
     Random,
     AuthFailure,
@@ -42,6 +45,9 @@ pub enum VaultError {
 impl DisplayError for VaultError {
     fn to_string(&self) -> String {
         match self {
+            Self::BadPrfOutputLength { got } => {
+                format!("prfOutput must be {PRF_OUTPUT_LEN} bytes (W3C WebAuthn PRF), got {got}")
+            }
             Self::BadWrapNonceLength { got } => {
                 format!("wrapNonce must be {NONCE_LEN} bytes, got {got}")
             }
@@ -52,7 +58,7 @@ impl DisplayError for VaultError {
                 format!("nonce must be {NONCE_LEN} bytes, got {got}")
             }
             Self::Hkdf => String::from("KEK derivation failed"),
-            Self::Aead => String::from("AEAD operation failed"),
+            Self::Aead(e) => format!("AEAD operation failed: {e}"),
             Self::Key(e) => format!("invalid key: {e}"),
             Self::Random => String::from("entropy source (crypto.getRandomValues / OS RNG) failed"),
             Self::AuthFailure => {
@@ -69,8 +75,8 @@ impl From<HkdfError> for VaultError {
 }
 
 impl From<AeadError> for VaultError {
-    fn from(_: AeadError) -> Self {
-        Self::Aead
+    fn from(e: AeadError) -> Self {
+        Self::Aead(e)
     }
 }
 
@@ -93,6 +99,11 @@ impl CryptoVault {
     /// `crypto.getRandomValues` on the web) so they never appear as a
     /// JS-visible byte buffer — see ADR 0005.
     pub fn enroll(prf_output: &[u8], prf_salt: &[u8]) -> Result<EnrollResult, VaultError> {
+        if prf_output.len() != PRF_OUTPUT_LEN {
+            return Err(VaultError::BadPrfOutputLength {
+                got: prf_output.len(),
+            });
+        }
         // Wrap the DEK buffer in `Zeroizing` so it wipes on every drop
         // path, including the error paths below.
         let mut dek_bytes = Zeroizing::new([0u8; KEY_LEN]);
@@ -119,6 +130,11 @@ impl CryptoVault {
         wrapped_dek: &[u8],
         wrap_nonce: &[u8],
     ) -> Result<Self, VaultError> {
+        if prf_output.len() != PRF_OUTPUT_LEN {
+            return Err(VaultError::BadPrfOutputLength {
+                got: prf_output.len(),
+            });
+        }
         if wrap_nonce.len() != NONCE_LEN {
             return Err(VaultError::BadWrapNonceLength {
                 got: wrap_nonce.len(),
@@ -312,6 +328,39 @@ mod tests {
                 expected: _
             })
         ));
+    }
+
+    #[test]
+    fn enroll_rejects_non_32_byte_prf_output() {
+        // Empty, too-short, and too-long inputs all rejected.
+        let salt = vec![0u8; 16];
+        for bogus_len in [0usize, 1, 16, 31, 33, 64] {
+            let bogus = vec![0u8; bogus_len];
+            assert!(
+                matches!(
+                    CryptoVault::enroll(&bogus, &salt),
+                    Err(VaultError::BadPrfOutputLength { .. })
+                ),
+                "enroll must reject {bogus_len}-byte PRF output",
+            );
+        }
+    }
+
+    #[test]
+    fn unlock_rejects_non_32_byte_prf_output() {
+        let (prf, salt) = fixture(0x60);
+        let enroll = CryptoVault::enroll(&prf, &salt).unwrap();
+        let salt16 = vec![0u8; 16];
+        for bogus_len in [0usize, 1, 16, 31, 33, 64] {
+            let bogus = vec![0u8; bogus_len];
+            assert!(
+                matches!(
+                    CryptoVault::unlock(&bogus, &salt16, &enroll.wrapped_dek, &enroll.wrap_nonce),
+                    Err(VaultError::BadPrfOutputLength { .. })
+                ),
+                "unlock must reject {bogus_len}-byte PRF output",
+            );
+        }
     }
 
     #[test]
