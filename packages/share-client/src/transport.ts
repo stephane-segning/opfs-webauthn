@@ -71,10 +71,25 @@ export class RendezvousClient {
 			"mint request failed",
 		);
 		if (!response.ok) throw shareErrorForStatus(response.status, "mint");
-		const json = (await response.json()) as {
-			code: string;
-			expiresAt: number;
-		};
+		// A malformed JSON body would otherwise surface as a raw
+		// `SyntaxError`; wrap it as a typed `protocol` error so
+		// callers branch on `kind` like every other failure path.
+		let json: { code?: unknown; expiresAt?: unknown };
+		try {
+			json = (await response.json()) as typeof json;
+		} catch (err) {
+			const cause = err instanceof Error ? `: ${err.message}` : "";
+			throw new ShareError(
+				"protocol",
+				`mint response was not valid JSON${cause}`,
+			);
+		}
+		if (typeof json.code !== "string" || typeof json.expiresAt !== "number") {
+			throw new ShareError(
+				"protocol",
+				"mint response missing `code` or `expiresAt`",
+			);
+		}
 		return { code: json.code, expiresAt: json.expiresAt };
 	}
 

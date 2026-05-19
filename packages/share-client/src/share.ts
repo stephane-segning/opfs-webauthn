@@ -13,14 +13,25 @@
  * with an in-memory backend (see `share.test.ts`).
  */
 
-import { RecipientHandle, sealShare, verifyCode } from "@opfs/core-wasm";
+import init, { RecipientHandle, sealShare, verifyCode } from "@opfs/core-wasm";
 
 import { decodeShareBlob, encodeShareBlob } from "./blob.js";
+import { CODE_LEN, normalizeCode } from "./code.js";
 import { ShareError } from "./errors.js";
 import type { RendezvousClient } from "./transport.js";
 
-/** Pickup-code length in Crockford-base32 characters (mirrors WASM). */
-const CODE_LEN = 12;
+let wasmReady: Promise<unknown> | null = null;
+
+/**
+ * Ensure `@opfs/core-wasm` is initialized exactly once before any
+ * share API touches the wasm boundary. `init()` is idempotent, but
+ * caching the promise avoids re-fetching the .wasm artifact on every
+ * call and gives concurrent callers a single in-flight load.
+ */
+async function ensureWasmReady(): Promise<void> {
+	if (!wasmReady) wasmReady = init();
+	await wasmReady;
+}
 
 export type RecipientSession = {
 	/** Human-readable pickup code; share with the sender out of band. */
@@ -51,6 +62,7 @@ const DEFAULT_POLL_TIMEOUT_MS = 300_000;
 export async function prepareReceive(
 	client: RendezvousClient,
 ): Promise<RecipientSession> {
+	await ensureWasmReady();
 	const handle = RecipientHandle.prepare();
 	try {
 		const { code, expiresAt } = await client.mint(handle.pubkey);
@@ -72,9 +84,15 @@ export async function pollAndDecrypt(
 	session: RecipientSession,
 	options: PollOptions = {},
 ): Promise<Uint8Array> {
+	await ensureWasmReady();
 	const intervalMs = options.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 	const timeoutMs = options.timeoutMs ?? DEFAULT_POLL_TIMEOUT_MS;
-	const deadline = Date.now() + timeoutMs;
+	// Cap the deadline by the server-issued `expiresAt` — after that
+	// point the backend will 410 every request, so polling on is
+	// strictly wasted round trips and delays surfacing expiry to
+	// the UI.
+	const expiryMs = session.expiresAt * 1000;
+	const deadline = Math.min(Date.now() + timeoutMs, expiryMs);
 	try {
 		while (true) {
 			throwIfAborted(options.signal);
@@ -105,11 +123,16 @@ export async function sendShare(
 	code: string,
 	plaintext: Uint8Array,
 ): Promise<void> {
-	if (code.length !== CODE_LEN) {
-		throw new ShareError("protocol", `code must be ${CODE_LEN} characters`);
+	await ensureWasmReady();
+	const normalized = normalizeCode(code);
+	if (normalized === null) {
+		throw new ShareError(
+			"protocol",
+			`code must be ${CODE_LEN} Crockford-base32 characters`,
+		);
 	}
-	const recipientPubkey = await client.fetchEpk(code);
-	if (!verifyCode(code, recipientPubkey)) {
+	const recipientPubkey = await client.fetchEpk(normalized);
+	if (!verifyCode(normalized, recipientPubkey)) {
 		throw new ShareError(
 			"commitmentMismatch",
 			"rendezvous pubkey does not match the code",
@@ -124,7 +147,7 @@ export async function sendShare(
 	// Free wasm-side allocations before the await so we don't sit on
 	// them while the network call is in flight.
 	sealed.free();
-	await client.uploadBlob(code, blob);
+	await client.uploadBlob(normalized, blob);
 }
 
 function openSealedBlob(handle: RecipientHandle, blob: Uint8Array): Uint8Array {

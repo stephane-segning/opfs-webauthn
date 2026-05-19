@@ -18,6 +18,7 @@ export {
 	SHARE_BLOB_HEADER_LEN,
 	type ShareBlobParts,
 } from "./blob.js";
+export { CODE_LEN, normalizeCode } from "./code.js";
 export { ShareError, type ShareErrorKind } from "./errors.js";
 export {
 	type PollOptions,

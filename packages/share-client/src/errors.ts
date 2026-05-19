@@ -38,14 +38,14 @@ export function shareErrorForStatus(
 				status,
 			);
 		case 404:
-			if (context === "fetchRendezvous" || context === "downloadBlob") {
-				return new ShareError(
-					"rendezvousNotFound",
-					"no such rendezvous",
-					status,
-				);
+			if (context === "downloadBlob") {
+				return new ShareError("blobUnavailable", "blob unavailable", status);
 			}
-			return new ShareError("blobUnavailable", "blob unavailable", status);
+			// `fetchRendezvous` and `uploadBlob` both 404 when the
+			// rendezvous code itself is unknown to the backend, so the
+			// shared classification gives the UI a single recovery path
+			// ("retype the code") instead of a confusing blob-state error.
+			return new ShareError("rendezvousNotFound", "no such rendezvous", status);
 		case 409:
 			return new ShareError(
 				"blobAlreadyUploaded",

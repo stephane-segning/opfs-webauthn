@@ -66,6 +66,27 @@ describe("RendezvousClient.mint", () => {
 			kind: "originDenied",
 		});
 	});
+
+	it("maps a malformed JSON body to a typed protocol error", async () => {
+		const { client } = makeClient(
+			() => new Response("not json at all", { status: 200 }),
+		);
+		await expect(client.mint(new Uint8Array(32))).rejects.toMatchObject({
+			kind: "protocol",
+		});
+	});
+
+	it("maps a JSON body missing `code` or `expiresAt` to protocol", async () => {
+		const { client } = makeClient(
+			() =>
+				new Response(JSON.stringify({ code: "AAAAAAAAAAAA" }), {
+					status: 200,
+				}),
+		);
+		await expect(client.mint(new Uint8Array(32))).rejects.toMatchObject({
+			kind: "protocol",
+		});
+	});
 });
 
 describe("RendezvousClient.fetchEpk", () => {
@@ -121,6 +142,13 @@ describe("RendezvousClient.uploadBlob", () => {
 		await expect(
 			client.uploadBlob("AAAAAAAAAAAA", new Uint8Array([1])),
 		).rejects.toMatchObject({ kind: "blobAlreadyUploaded" });
+	});
+
+	it("maps 404 to rendezvousNotFound (unknown code, not a blob-state error)", async () => {
+		const { client } = makeClient(() => new Response("", { status: 404 }));
+		await expect(
+			client.uploadBlob("AAAAAAAAAAAA", new Uint8Array([1])),
+		).rejects.toMatchObject({ kind: "rendezvousNotFound" });
 	});
 });
 
