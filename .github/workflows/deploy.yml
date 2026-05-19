@@ -1,0 +1,82 @@
+name: Deploy to GitHub Pages
+
+# Trigger manually for now. The push-to-main trigger is commented out
+# until the tRPC scaffold is removed from apps/web and the app is
+# fully compatible with `output: 'export'`. To enable continuous Pages
+# deploys, restore the `push.branches: [main]` block below.
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+
+# Allow only one concurrent deployment; let the latest queued run win
+# without cancelling the in-progress one (so we never serve a half-built
+# page on Pages).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build static export
+    runs-on: ubuntu-latest
+    env:
+      SKIP_ENV_VALIDATION: "1"
+      # Switch on the static-export branch of apps/web/next.config.js.
+      NEXT_OUTPUT_EXPORT: "1"
+      # Pages serves this app under a project URL (e.g. /opfs-webauthn);
+      # apps/web reads this to set basePath + assetPrefix.
+      NEXT_PUBLIC_BASE_PATH: /opfs-webauthn
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard — refuse to deploy while tRPC is still wired
+        # Manually dispatching this workflow today would publish a
+        # broken site to Pages: the UI still calls `/api/trpc/*` and a
+        # static export does not serve that route. Once the tRPC
+        # scaffold is removed from apps/web, this guard becomes a
+        # no-op. Delete it (and uncomment the push trigger above) at
+        # that point.
+        run: |
+          set -e
+          if [ -d apps/web/src/server ] || [ -d apps/web/src/app/api/trpc ] || [ -d apps/web/src/trpc ]; then
+            echo "::error::tRPC scaffold still present in apps/web. Refusing to deploy a broken static export. Remove apps/web/src/server, apps/web/src/app/api/trpc, and apps/web/src/trpc first."
+            exit 1
+          fi
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build static export
+        run: pnpm --filter @opfs/web build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/out
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
