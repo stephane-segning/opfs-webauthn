@@ -79,6 +79,76 @@ importers:
         specifier: ^5.8.2
         version: 5.9.3
 
+  packages/auth:
+    dependencies:
+      '@opfs/core-wasm':
+        specifier: workspace:*
+        version: link:../core-wasm
+    devDependencies:
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/core-wasm:
+    devDependencies:
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/design-tokens:
+    devDependencies:
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/state:
+    dependencies:
+      '@opfs/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@opfs/storage':
+        specifier: workspace:*
+        version: link:../storage
+    devDependencies:
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/storage:
+    dependencies:
+      '@opfs/core-wasm':
+        specifier: workspace:*
+        version: link:../core-wasm
+    devDependencies:
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
+  packages/ui:
+    dependencies:
+      '@opfs/design-tokens':
+        specifier: workspace:*
+        version: link:../design-tokens
+      '@opfs/state':
+        specifier: workspace:*
+        version: link:../state
+    devDependencies:
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: ^19.0.0
+        version: 19.2.3(@types/react@19.2.14)
+      react:
+        specifier: ^19.0.0
+        version: 19.2.6
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.6(react@19.2.6)
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+
 packages:
 
   '@alloc/quick-lru@5.2.0':

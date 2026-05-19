@@ -1,0 +1,27 @@
+{
+	"name": "@opfs/state",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Zustand stores for the opfs-webauthn vault, notes, share, and UI slices.",
+	"license": "MIT",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts"
+		}
+	},
+	"files": [
+		"src"
+	],
+	"scripts": {
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@opfs/auth": "workspace:*",
+		"@opfs/storage": "workspace:*"
+	},
+	"devDependencies": {
+		"typescript": "^5.8.2"
+	}
+}
