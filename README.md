@@ -1,29 +1,52 @@
-# Create T3 App
+# opfs-webauthn
 
-This is a [T3 Stack](https://create.t3.gg/) project bootstrapped with `create-t3-app`.
+Local-first, end-to-end encrypted notes PWA. Identity is a WebAuthn
+passkey with the PRF extension; storage is SQLite over OPFS; crypto
+and DB row codec live in Rust compiled to WASM.
 
-## What's next? How do I make an app with this?
+See [docs/](docs/) for the PRD and ADRs that drive every architectural
+choice in this repo.
 
-We try to keep this project as simple as possible, so you can start with just the scaffolding we set up for you, and add additional things later when they become necessary.
+## Layout
 
-If you are not familiar with the different technologies used in this project, please refer to the respective docs. If you still are in the wind, please join our [Discord](https://t3.gg/discord) and ask for help.
+```
+.
+├── apps/
+│   └── web/                 Next.js app (static-exported to GitHub Pages)
+├── packages/                JS/TS workspace packages (added per ADR 0010)
+├── crates/                  Rust workspace crates (added per ADR 0010)
+└── docs/                    PRD + ADRs
+```
 
-- [Next.js](https://nextjs.org)
-- [NextAuth.js](https://next-auth.js.org)
-- [Prisma](https://prisma.io)
-- [Drizzle](https://orm.drizzle.team)
-- [Tailwind CSS](https://tailwindcss.com)
-- [tRPC](https://trpc.io)
+`apps/share-backend` (Cloudflare Workers, see ADR 0007) and the
+`packages/*` / `crates/*` directories are landed in follow-up PRs.
 
-## Learn More
+## Development
 
-To learn more about the [T3 Stack](https://create.t3.gg/), take a look at the following resources:
+```sh
+pnpm install
+pnpm dev          # turbo orchestrates per-app dev servers
+pnpm build        # production build
+pnpm typecheck
+pnpm check        # biome lint + format
+```
 
-- [Documentation](https://create.t3.gg/)
-- [Learn the T3 Stack](https://create.t3.gg/en/faq#what-learning-resources-are-currently-available) — Check out these awesome tutorials
+Single app dev:
 
-You can check out the [create-t3-app GitHub repository](https://github.com/t3-oss/create-t3-app) — your feedback and contributions are welcome!
+```sh
+pnpm --filter @opfs/web dev
+```
 
-## How do I deploy this?
+## Stack
 
-Follow our deployment guides for [Vercel](https://create.t3.gg/en/deployment/vercel), [Netlify](https://create.t3.gg/en/deployment/netlify) and [Docker](https://create.t3.gg/en/deployment/docker) for more information.
+- **Frontend**: Next.js 15 (static export), React 19, Tailwind v4, Zustand.
+- **Local store**: `sqlite-wasm` on OPFS, driven by a SharedWorker
+  (ADR 0006).
+- **Crypto + repo**: Rust → WASM, AES-256-GCM rows, HKDF-derived KEK
+  from WebAuthn PRF (ADR 0005).
+- **Sharing**: Cloudflare Workers rendezvous with a BLAKE3-commitment
+  pickup code (ADR 0007).
+
+## License
+
+MIT.
