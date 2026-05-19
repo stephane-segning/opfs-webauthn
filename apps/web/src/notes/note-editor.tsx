@@ -2,7 +2,7 @@
 
 import type { Note } from "@opfs/storage";
 import { useTranslations } from "next-intl";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Draft input local to the editor. `id` carries through on update;
@@ -35,34 +35,43 @@ export function NoteEditor({
 	const t = useTranslations("notes");
 	const [draft, setDraft] = useState<Draft>(fromNote(note));
 	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	// A ref guards against double-submission within the same tick;
+	// React's `setBusy(true)` only disables the button on the next
+	// render, so the second click of a rapid pair would otherwise
+	// race past the disabled prop and produce a duplicate note.
+	const inflight = useRef(false);
 
 	// If the parent swaps the active note while we're open, sync.
 	useEffect(() => {
 		setDraft(fromNote(note));
+		setError(null);
 	}, [note]);
 
 	const dirty = note
 		? draft.title !== note.title || draft.body !== note.body
 		: draft.title.length > 0 || draft.body.length > 0;
 
-	async function handleSave() {
+	async function runGuarded(action: () => Promise<void>): Promise<void> {
+		if (inflight.current) return;
+		inflight.current = true;
 		setBusy(true);
+		setError(null);
 		try {
-			await onSave(draft);
+			await action();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
 		} finally {
+			inflight.current = false;
 			setBusy(false);
 		}
 	}
 
-	async function handleArchive() {
-		if (!note || !onArchive) return;
-		setBusy(true);
-		try {
-			await onArchive(note.id);
-		} finally {
-			setBusy(false);
-		}
-	}
+	const handleSave = () => runGuarded(() => onSave(draft));
+	const handleArchive = () => {
+		if (!note || !onArchive) return Promise.resolve();
+		return runGuarded(() => onArchive(note.id));
+	};
 
 	return (
 		<section aria-label={t("editor.region")} className="note-editor">
@@ -84,6 +93,11 @@ export function NoteEditor({
 					{t("editor.save")}
 				</button>
 			</header>
+			{error ? (
+				<p className="auth-error" role="alert">
+					{error}
+				</p>
+			) : null}
 			<input
 				aria-label={t("editor.titleLabel")}
 				className="note-editor-title"

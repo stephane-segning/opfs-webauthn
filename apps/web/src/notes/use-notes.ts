@@ -6,15 +6,35 @@ import { useCallback, useEffect, useState } from "react";
 /**
  * Subscribe to the notes list for a given repo. Reloads on mount and
  * on every `tx-applied` broadcast — the worker tells us when a write
- * lands and we re-page from disk rather than maintaining our own
- * mutation diff. Simpler, correct, and matches ADR 0009.
+ * lands and we re-page from disk rather than maintaining a client-side
+ * diff. Simpler, correct, matches ADR 0009.
+ *
+ * Pages through to completion so we never silently truncate the list.
+ * For very large vaults this is O(notes) per reload; when that
+ * matters we can swap in virtualised pagination behind the same hook
+ * signature.
  */
 export type NotesState =
 	| { readonly status: "loading" }
 	| { readonly status: "ready"; readonly notes: readonly Note[] }
 	| { readonly status: "error"; readonly error: Error };
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 200;
+const MAX_PAGES = 200; // 200 × 200 = 40 000 — generous safety net.
+
+async function loadAllNotes(repo: Repo): Promise<readonly Note[]> {
+	const collected: Note[] = [];
+	let cursor: string | null = null;
+	for (let i = 0; i < MAX_PAGES; i++) {
+		const page = await repo.listNotes({ limit: PAGE_SIZE, cursor });
+		collected.push(...page.notes);
+		if (!page.nextCursor) return collected;
+		cursor = page.nextCursor;
+	}
+	throw new Error(
+		`refused to load past ${MAX_PAGES * PAGE_SIZE} notes; add a paged view`,
+	);
+}
 
 export function useNotes(repo: Repo): {
 	readonly state: NotesState;
@@ -24,8 +44,8 @@ export function useNotes(repo: Repo): {
 
 	const reload = useCallback(async () => {
 		try {
-			const page = await repo.listNotes({ limit: PAGE_SIZE });
-			setState({ status: "ready", notes: page.notes });
+			const notes = await loadAllNotes(repo);
+			setState({ status: "ready", notes });
 		} catch (err) {
 			setState({
 				status: "error",
