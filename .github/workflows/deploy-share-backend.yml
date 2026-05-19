@@ -1,0 +1,83 @@
+name: Deploy share backend
+
+# Deploys the Cloudflare Worker that brokers the recipient-first
+# share rendezvous (ADR 0007). Two trigger paths:
+#   - automatic on `main` when files under apps/share-backend change
+#   - manual (`workflow_dispatch`) for re-deploys after secret rotations
+#
+# Repository setup (one-time):
+#   1. Create a Cloudflare API token with permissions for Workers
+#      Scripts, KV, and R2; add it as the `CLOUDFLARE_API_TOKEN`
+#      secret on this repo.
+#   2. Set `CLOUDFLARE_ACCOUNT_ID` as a repository variable
+#      (or a secret if you prefer — wrangler reads it either way).
+#   3. Run `wrangler kv namespace create RENDEZVOUS` and
+#      `wrangler r2 bucket create opfs-share-blobs` once, then paste
+#      the returned KV namespace id into `apps/share-backend/wrangler.jsonc`.
+#
+# If `CLOUDFLARE_API_TOKEN` is unset the workflow short-circuits with a
+# notice rather than failing — that keeps fork CI green for contributors
+# who don't have Cloudflare access.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/share-backend/**"
+      - ".github/workflows/deploy-share-backend.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-share-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: wrangler deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Cloudflare credentials
+        id: creds
+        run: |
+          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping Worker deploy."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up pnpm
+        if: steps.creds.outputs.ready == 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node 20
+        if: steps.creds.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        if: steps.creds.outputs.ready == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck + test
+        if: steps.creds.outputs.ready == 'true'
+        run: pnpm --filter @opfs/share-backend test && pnpm --filter @opfs/share-backend typecheck
+
+      - name: Deploy via wrangler
+        if: steps.creds.outputs.ready == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/share-backend
+          # `wrangler deploy` reads bindings from wrangler.jsonc and
+          # publishes the Worker. ALLOWED_ORIGINS lives in vars there
+          # too; rotate via `wrangler.jsonc` + a re-deploy.
+          command: deploy
