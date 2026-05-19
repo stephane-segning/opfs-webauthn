@@ -8,11 +8,15 @@
  * import init, { CryptoVault, codeForPubkey } from "@opfs/core-wasm";
  * await init();
  *
- * const dek = crypto.getRandomValues(new Uint8Array(32));
- * const wrapNonce = crypto.getRandomValues(new Uint8Array(12));
- * const enroll = CryptoVault.enroll(dek, wrapNonce, prfOutput, prfSalt);
- * // persist enroll.wrappedDek + enroll.wrapNonce in OPFS, keep the vault
+ * // Wasm generates the DEK + wrap nonce inside the module
+ * // (crypto.getRandomValues via getrandom). The raw key bytes never
+ * // cross back into JS — see ADR 0005.
+ * const enroll = CryptoVault.enroll(prfOutput, prfSalt);
+ * persistToOPFS({ wrappedDek: enroll.wrappedDek, wrapNonce: enroll.wrapNonce });
  * const vault = enroll.takeVault();
+ *
+ * // Cold-start unlock:
+ * const reopened = CryptoVault.unlock(prfOutput, prfSalt, wrappedDek, wrapNonce);
  * ```
  */
 

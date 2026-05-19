@@ -150,24 +150,22 @@ pub struct CryptoVault(core::CryptoVault);
 
 #[wasm_bindgen]
 impl CryptoVault {
-    /// Enroll: wrap a freshly-generated random DEK with a KEK derived
-    /// from the `WebAuthn` PRF output, and return both the wrapped DEK
-    /// (to persist) and an unlocked vault ready to encrypt rows.
+    /// Enroll: generate a fresh random DEK inside wasm, wrap it with a
+    /// KEK derived from the `WebAuthn` PRF output, and return both the
+    /// wrapped DEK (to persist) and an unlocked vault ready to
+    /// encrypt rows.
     ///
-    /// `dekBytes` and `wrapNonce` must come from `crypto.getRandomValues`
-    /// (32 and 12 bytes respectively).
+    /// The DEK and wrap nonce are generated via `getrandom` (which
+    /// the "js" feature wires to `crypto.getRandomValues` in the
+    /// browser), so the raw key bytes never appear in JS — see
+    /// ADR 0005.
     ///
     /// `prfOutput` is the PRF result from the `WebAuthn` ceremony.
     /// `prfSalt` is the per-vault salt persisted alongside the
     /// credential id.
     #[wasm_bindgen(js_name = enroll)]
-    pub fn enroll(
-        dek_bytes: &[u8],
-        wrap_nonce: &[u8],
-        prf_output: &[u8],
-        prf_salt: &[u8],
-    ) -> Result<EnrollResult, JsError> {
-        core::CryptoVault::enroll(dek_bytes, wrap_nonce, prf_output, prf_salt)
+    pub fn enroll(prf_output: &[u8], prf_salt: &[u8]) -> Result<EnrollResult, JsError> {
+        core::CryptoVault::enroll(prf_output, prf_salt)
             .map(EnrollResult::from)
             .map_err(into_js_error)
     }

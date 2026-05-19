@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use opfs_crypto::{
     Aead, AeadError, HkdfError, KEY_LEN, Key, KeyError, NONCE_LEN, TAG_LEN, derive_kek,
 };
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 /// Context label for the KEK derivation, per ADR 0005.
 const KEK_INFO: &[u8] = b"opfs-webauthn/v1/kek";
@@ -29,20 +29,19 @@ pub trait DisplayError {
 
 #[derive(Debug)]
 pub enum VaultError {
-    BadDekLength { got: usize },
     BadWrapNonceLength { got: usize },
     BadWrappedDekLength { got: usize, expected: usize },
     BadRowNonceLength { got: usize },
     Hkdf,
     Aead,
     Key(KeyError),
+    Random,
     AuthFailure,
 }
 
 impl DisplayError for VaultError {
     fn to_string(&self) -> String {
         match self {
-            Self::BadDekLength { got } => format!("dekBytes must be {KEY_LEN} bytes, got {got}"),
             Self::BadWrapNonceLength { got } => {
                 format!("wrapNonce must be {NONCE_LEN} bytes, got {got}")
             }
@@ -55,6 +54,7 @@ impl DisplayError for VaultError {
             Self::Hkdf => String::from("KEK derivation failed"),
             Self::Aead => String::from("AEAD operation failed"),
             Self::Key(e) => format!("invalid key: {e}"),
+            Self::Random => String::from("entropy source (crypto.getRandomValues / OS RNG) failed"),
             Self::AuthFailure => {
                 String::from("vault unlock failed (wrong passkey or tampered data)")
             }
@@ -88,31 +88,23 @@ pub struct CryptoVault {
 }
 
 impl CryptoVault {
-    pub fn enroll(
-        dek_bytes: &[u8],
-        wrap_nonce: &[u8],
-        prf_output: &[u8],
-        prf_salt: &[u8],
-    ) -> Result<EnrollResult, VaultError> {
-        if dek_bytes.len() != KEY_LEN {
-            return Err(VaultError::BadDekLength {
-                got: dek_bytes.len(),
-            });
-        }
-        if wrap_nonce.len() != NONCE_LEN {
-            return Err(VaultError::BadWrapNonceLength {
-                got: wrap_nonce.len(),
-            });
-        }
+    /// Enroll a new vault. The DEK and wrap nonce are generated inside
+    /// wasm (via `getrandom`, which the "js" feature wires to
+    /// `crypto.getRandomValues` on the web) so they never appear as a
+    /// JS-visible byte buffer — see ADR 0005.
+    pub fn enroll(prf_output: &[u8], prf_salt: &[u8]) -> Result<EnrollResult, VaultError> {
+        // Wrap the DEK buffer in `Zeroizing` so it wipes on every drop
+        // path, including the error paths below.
+        let mut dek_bytes = Zeroizing::new([0u8; KEY_LEN]);
+        getrandom::getrandom(dek_bytes.as_mut()).map_err(|_| VaultError::Random)?;
+        let mut wrap_nonce = [0u8; NONCE_LEN];
+        getrandom::getrandom(&mut wrap_nonce).map_err(|_| VaultError::Random)?;
+
         let kek = derive_kek(prf_output, prf_salt, KEK_INFO)?;
-        let dek = Key::from_slice(dek_bytes)?;
+        let dek = Key::from_slice(&*dek_bytes)?;
         let kek_aead = Aead::new(&kek);
         let wrapped = kek_aead
-            .encrypt(
-                wrap_nonce.try_into().expect("len checked above"),
-                DEK_WRAP_AAD,
-                dek.expose(),
-            )
+            .encrypt(&wrap_nonce, DEK_WRAP_AAD, dek.expose())
             .map_err(VaultError::from)?;
         Ok(EnrollResult {
             vault: Some(Self { dek }),
@@ -141,18 +133,19 @@ impl CryptoVault {
         }
         let kek = derive_kek(prf_output, prf_salt, KEK_INFO)?;
         let kek_aead = Aead::new(&kek);
-        let mut dek_bytes = kek_aead
-            .decrypt(
-                wrap_nonce.try_into().expect("len checked above"),
-                DEK_WRAP_AAD,
-                wrapped_dek,
-            )
-            .map_err(|_| VaultError::AuthFailure)?;
+        // Wrap the decrypted DEK in `Zeroizing` so the Vec wipes on
+        // every drop path, including the error branch from
+        // `Key::from_slice` below.
+        let dek_bytes = Zeroizing::new(
+            kek_aead
+                .decrypt(
+                    wrap_nonce.try_into().expect("len checked above"),
+                    DEK_WRAP_AAD,
+                    wrapped_dek,
+                )
+                .map_err(|_| VaultError::AuthFailure)?,
+        );
         let dek = Key::from_slice(&dek_bytes)?;
-        // The `decrypt` Vec lingers in linear memory until allocator
-        // reuse. Wipe it explicitly so the only DEK copy is inside the
-        // ZeroizeOnDrop `Key`.
-        dek_bytes.zeroize();
         Ok(Self { dek })
     }
 
@@ -197,6 +190,8 @@ pub struct EnrollResult {
 }
 
 impl EnrollResult {
+    // `Option::take` is `const fn` since Rust 1.83; workspace
+    // `rust-version` is 1.85.
     pub const fn take_vault(&mut self) -> Option<CryptoVault> {
         self.vault.take()
     }
@@ -207,33 +202,16 @@ mod tests {
     use super::*;
     use alloc::vec;
 
-    fn fixture(seed: u8) -> ([u8; 32], [u8; 12], Vec<u8>, Vec<u8>) {
-        let mut dek = [0u8; 32];
-        let mut wrap_nonce = [0u8; 12];
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "loop index always fits in u8"
-        )]
-        for (i, b) in dek.iter_mut().enumerate() {
-            *b = seed.wrapping_add(i as u8);
-        }
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "loop index always fits in u8"
-        )]
-        for (i, b) in wrap_nonce.iter_mut().enumerate() {
-            *b = seed.wrapping_mul(7).wrapping_add(i as u8);
-        }
+    fn fixture(seed: u8) -> (Vec<u8>, Vec<u8>) {
         let prf = vec![seed; 32];
         let salt = vec![seed.wrapping_add(1); 16];
-        (dek, wrap_nonce, prf, salt)
+        (prf, salt)
     }
 
     #[test]
     fn enroll_and_unlock_roundtrip_through_persisted_blob() {
-        let (dek, wrap_nonce, prf, salt) = fixture(0xA5);
-        let mut enroll =
-            CryptoVault::enroll(&dek, &wrap_nonce, &prf, &salt).expect("enroll succeeds");
+        let (prf, salt) = fixture(0xA5);
+        let mut enroll = CryptoVault::enroll(&prf, &salt).expect("enroll succeeds");
 
         let vault = enroll.take_vault().unwrap();
         let row_nonce = [0xCC; 12];
@@ -255,8 +233,8 @@ mod tests {
 
     #[test]
     fn unlock_rejects_wrong_prf_output() {
-        let (dek, wrap_nonce, prf, salt) = fixture(0x10);
-        let enroll = CryptoVault::enroll(&dek, &wrap_nonce, &prf, &salt).unwrap();
+        let (prf, salt) = fixture(0x10);
+        let enroll = CryptoVault::enroll(&prf, &salt).unwrap();
         let mut wrong_prf = prf;
         wrong_prf[0] ^= 0x01;
         let err = CryptoVault::unlock(&wrong_prf, &salt, &enroll.wrapped_dek, &enroll.wrap_nonce);
@@ -265,8 +243,8 @@ mod tests {
 
     #[test]
     fn unlock_rejects_tampered_wrapped_dek() {
-        let (dek, wrap_nonce, prf, salt) = fixture(0x20);
-        let enroll = CryptoVault::enroll(&dek, &wrap_nonce, &prf, &salt).unwrap();
+        let (prf, salt) = fixture(0x20);
+        let enroll = CryptoVault::enroll(&prf, &salt).unwrap();
         let mut wrapped = enroll.wrapped_dek.clone();
         wrapped[0] ^= 0x01;
         let err = CryptoVault::unlock(&prf, &salt, &wrapped, &enroll.wrap_nonce);
@@ -275,8 +253,8 @@ mod tests {
 
     #[test]
     fn unlock_rejects_tampered_wrap_nonce() {
-        let (dek, wrap_nonce, prf, salt) = fixture(0x21);
-        let enroll = CryptoVault::enroll(&dek, &wrap_nonce, &prf, &salt).unwrap();
+        let (prf, salt) = fixture(0x21);
+        let enroll = CryptoVault::enroll(&prf, &salt).unwrap();
         let mut wrap_nonce_tampered = enroll.wrap_nonce.clone();
         wrap_nonce_tampered[0] ^= 0x01;
         let err = CryptoVault::unlock(&prf, &salt, &enroll.wrapped_dek, &wrap_nonce_tampered);
@@ -285,16 +263,16 @@ mod tests {
 
     #[test]
     fn take_vault_twice_returns_none_second_time() {
-        let (dek, wrap_nonce, prf, salt) = fixture(0x30);
-        let mut enroll = CryptoVault::enroll(&dek, &wrap_nonce, &prf, &salt).unwrap();
+        let (prf, salt) = fixture(0x30);
+        let mut enroll = CryptoVault::enroll(&prf, &salt).unwrap();
         assert!(enroll.take_vault().is_some());
         assert!(enroll.take_vault().is_none());
     }
 
     #[test]
     fn encrypt_rejects_bad_nonce_length() {
-        let (dek, wrap_nonce, prf, salt) = fixture(0x40);
-        let mut enroll = CryptoVault::enroll(&dek, &wrap_nonce, &prf, &salt).unwrap();
+        let (prf, salt) = fixture(0x40);
+        let mut enroll = CryptoVault::enroll(&prf, &salt).unwrap();
         let vault = enroll.take_vault().unwrap();
         assert!(matches!(
             vault.encrypt(&[0u8; 8], b"aad", b"x"),
@@ -307,15 +285,16 @@ mod tests {
     }
 
     #[test]
-    fn enroll_rejects_bad_input_lengths() {
-        assert!(matches!(
-            CryptoVault::enroll(&[0u8; 16], &[0u8; 12], &[0u8; 32], &[0u8; 16]),
-            Err(VaultError::BadDekLength { got: 16 })
-        ));
-        assert!(matches!(
-            CryptoVault::enroll(&[0u8; 32], &[0u8; 8], &[0u8; 32], &[0u8; 16]),
-            Err(VaultError::BadWrapNonceLength { got: 8 })
-        ));
+    fn enroll_produces_distinct_dek_each_call() {
+        // Same PRF + salt — two enroll calls still produce different
+        // wrapped DEKs, because the DEK and wrap nonce are both fresh
+        // random per call. This is the test that proves wasm-side
+        // randomness, not caller-supplied bytes.
+        let (prf, salt) = fixture(0x42);
+        let a = CryptoVault::enroll(&prf, &salt).unwrap();
+        let b = CryptoVault::enroll(&prf, &salt).unwrap();
+        assert_ne!(a.wrapped_dek, b.wrapped_dek);
+        assert_ne!(a.wrap_nonce, b.wrap_nonce);
     }
 
     #[test]
@@ -337,8 +316,8 @@ mod tests {
 
     #[test]
     fn different_aad_fails_decrypt() {
-        let (dek, wrap_nonce, prf, salt) = fixture(0x50);
-        let mut enroll = CryptoVault::enroll(&dek, &wrap_nonce, &prf, &salt).unwrap();
+        let (prf, salt) = fixture(0x50);
+        let mut enroll = CryptoVault::enroll(&prf, &salt).unwrap();
         let vault = enroll.take_vault().unwrap();
         let row_nonce = [0xAB; 12];
         let ct = vault.encrypt(&row_nonce, b"aad-a", b"payload").unwrap();
