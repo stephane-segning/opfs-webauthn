@@ -13,8 +13,6 @@ pub const TAG_LEN: usize = 16;
 
 #[derive(Debug, Error)]
 pub enum AeadError {
-    #[error("invalid nonce length: expected {NONCE_LEN}, got {0}")]
-    BadNonce(usize),
     #[error("encryption failed")]
     Encrypt,
     #[error("decryption failed (tag mismatch or truncated ciphertext)")]
@@ -44,13 +42,10 @@ impl Aead {
     /// Caller-supplied nonce must be unique under this key — never reuse.
     pub fn encrypt(
         &self,
-        nonce: &[u8],
+        nonce: &[u8; NONCE_LEN],
         aad: &[u8],
         plaintext: &[u8],
     ) -> Result<Vec<u8>, AeadError> {
-        if nonce.len() != NONCE_LEN {
-            return Err(AeadError::BadNonce(nonce.len()));
-        }
         let nonce = Nonce::from_slice(nonce);
         let mut buf = Vec::with_capacity(plaintext.len() + TAG_LEN);
         buf.extend_from_slice(plaintext);
@@ -63,13 +58,10 @@ impl Aead {
     /// Decrypt `ciphertext` (which includes the trailing tag).
     pub fn decrypt(
         &self,
-        nonce: &[u8],
+        nonce: &[u8; NONCE_LEN],
         aad: &[u8],
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, AeadError> {
-        if nonce.len() != NONCE_LEN {
-            return Err(AeadError::BadNonce(nonce.len()));
-        }
         let nonce = Nonce::from_slice(nonce);
         let mut buf = Vec::from(ciphertext);
         self.cipher
@@ -127,14 +119,5 @@ mod tests {
         let ct = aead.encrypt(&nonce, b"aad-a", b"payload").unwrap();
         let err = aead.decrypt(&nonce, b"aad-b", &ct).unwrap_err();
         assert!(matches!(err, AeadError::Decrypt));
-    }
-
-    #[test]
-    fn aes_gcm_rejects_bad_nonce_length() {
-        let key = Key::from_bytes([7u8; 32]);
-        let aead = Aead::new(&key);
-        let too_short = [0u8; 8];
-        let err = aead.encrypt(&too_short, b"", b"x").unwrap_err();
-        assert!(matches!(err, AeadError::BadNonce(8)));
     }
 }

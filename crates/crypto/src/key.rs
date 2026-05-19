@@ -3,7 +3,7 @@
 use crate::KEY_LEN;
 use alloc::vec::Vec;
 use thiserror::Error;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 #[derive(Debug, Error)]
 pub enum KeyError {
@@ -12,7 +12,7 @@ pub enum KeyError {
 }
 
 /// A 256-bit symmetric key. Zeroized on drop.
-#[derive(Clone, ZeroizeOnDrop)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct Key([u8; KEY_LEN]);
 
 impl Key {
@@ -43,11 +43,11 @@ impl Key {
 
     /// Move the raw bytes out and consume the key. The caller is
     /// responsible for zeroizing the returned buffer once it is no
-    /// longer needed.
-    pub fn into_bytes(mut self) -> [u8; KEY_LEN] {
+    /// longer needed. `self` is zeroized automatically on drop at end
+    /// of scope thanks to `ZeroizeOnDrop`.
+    pub fn into_bytes(self) -> [u8; KEY_LEN] {
         let mut out = [0u8; KEY_LEN];
         out.copy_from_slice(&self.0);
-        self.0.zeroize();
         out
     }
 }
@@ -69,28 +69,7 @@ pub fn wipe(buf: &mut [u8]) {
     buf.zeroize();
 }
 
-/// Convenience: produce an owned, zeroizing `Vec<u8>` that wipes on drop.
-#[derive(Clone)]
-pub struct ZeroizingVec(Vec<u8>);
-
-impl ZeroizingVec {
-    pub const fn new(v: Vec<u8>) -> Self {
-        Self(v)
-    }
-
-    pub fn as_slice(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl Drop for ZeroizingVec {
-    fn drop(&mut self) {
-        self.0.zeroize();
-    }
-}
-
-impl core::fmt::Debug for ZeroizingVec {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("ZeroizingVec(<redacted>)")
-    }
-}
+/// An owned `Vec<u8>` whose contents are wiped on drop. Type alias to
+/// `zeroize::Zeroizing<Vec<u8>>` — provides `Deref<Target = Vec<u8>>`
+/// so callers can use it like a regular `Vec`.
+pub type ZeroizingVec = Zeroizing<Vec<u8>>;

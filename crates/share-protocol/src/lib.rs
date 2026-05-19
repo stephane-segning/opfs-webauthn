@@ -23,13 +23,18 @@ use serde::{Deserialize, Serialize};
 /// incompatibly.
 pub const PROTOCOL_VERSION: u8 = 1;
 
+/// Length of an X25519 public key in bytes.
+pub const X25519_PUBKEY_LEN: usize = 32;
+/// Length of an AES-GCM nonce in bytes.
+pub const AES_GCM_NONCE_LEN: usize = 12;
+
 /// Body the recipient device posts to open a rendezvous.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RendezvousRequest {
     pub version: u8,
-    /// Recipient's ephemeral X25519 public key (32 bytes).
+    /// Recipient's ephemeral X25519 public key.
     #[serde(with = "serde_bytes")]
-    pub ephemeral_pubkey: Vec<u8>,
+    pub ephemeral_pubkey: [u8; X25519_PUBKEY_LEN],
 }
 
 /// Response returned to the recipient when a rendezvous is minted.
@@ -48,10 +53,10 @@ pub struct ShareBlob {
     pub version: u8,
     /// Sender's ephemeral X25519 public key for HPKE key agreement.
     #[serde(with = "serde_bytes")]
-    pub sender_pubkey: Vec<u8>,
-    /// 12-byte AES-GCM nonce.
+    pub sender_pubkey: [u8; X25519_PUBKEY_LEN],
+    /// AES-GCM nonce.
     #[serde(with = "serde_bytes")]
-    pub nonce: Vec<u8>,
+    pub nonce: [u8; AES_GCM_NONCE_LEN],
     /// AES-256-GCM ciphertext including the 16-byte tag.
     #[serde(with = "serde_bytes")]
     pub ciphertext: Vec<u8>,
@@ -64,9 +69,11 @@ mod tests {
 
     #[test]
     fn rendezvous_request_roundtrips_through_cbor() {
+        let mut pk = [0u8; X25519_PUBKEY_LEN];
+        pk[..4].copy_from_slice(&[1, 2, 3, 4]);
         let req = RendezvousRequest {
             version: PROTOCOL_VERSION,
-            ephemeral_pubkey: vec![1, 2, 3, 4],
+            ephemeral_pubkey: pk,
         };
         let mut buf = Vec::new();
         ciborium::into_writer(&req, &mut buf).unwrap();
@@ -79,14 +86,15 @@ mod tests {
     fn share_blob_roundtrips_through_cbor() {
         let blob = ShareBlob {
             version: PROTOCOL_VERSION,
-            sender_pubkey: vec![9; 32],
-            nonce: vec![0; 12],
+            sender_pubkey: [9; X25519_PUBKEY_LEN],
+            nonce: [0; AES_GCM_NONCE_LEN],
             ciphertext: vec![0xAA; 64],
         };
         let mut buf = Vec::new();
         ciborium::into_writer(&blob, &mut buf).unwrap();
         let decoded: ShareBlob = ciborium::from_reader(buf.as_slice()).unwrap();
         assert_eq!(decoded.sender_pubkey, blob.sender_pubkey);
+        assert_eq!(decoded.nonce, blob.nonce);
         assert_eq!(decoded.ciphertext, blob.ciphertext);
     }
 }

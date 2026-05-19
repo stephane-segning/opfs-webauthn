@@ -12,6 +12,7 @@ use crate::{KEY_LEN, key::Key};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Error)]
 pub enum HkdfError {
@@ -25,9 +26,13 @@ pub const KEK_INFO: &[u8] = b"opfs-webauthn/v1/kek";
 /// Derive a 256-bit KEK from the PRF output.
 pub fn derive_kek(prf_output: &[u8], salt: &[u8], info: &[u8]) -> Result<Key, HkdfError> {
     let hk = Hkdf::<Sha256>::new(Some(salt), prf_output);
-    let mut okm = [0u8; KEY_LEN];
-    hk.expand(info, &mut okm).map_err(|_| HkdfError::Expand)?;
-    Ok(Key::from_bytes(okm))
+    // `Zeroizing` wipes the OKM buffer when it drops at end of scope,
+    // so the only remaining copy of the key bytes is the one inside
+    // the returned `Key` (itself ZeroizeOnDrop).
+    let mut okm = Zeroizing::new([0u8; KEY_LEN]);
+    hk.expand(info, okm.as_mut())
+        .map_err(|_| HkdfError::Expand)?;
+    Ok(Key::from_bytes(*okm))
 }
 
 #[cfg(test)]
