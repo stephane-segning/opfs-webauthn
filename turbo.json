@@ -6,6 +6,24 @@
 			"dependsOn": ["^build"],
 			"outputs": ["dist/**", ".next/**", "!.next/cache/**", "out/**"]
 		},
+		"@opfs/core-wasm#build": {
+			"dependsOn": [],
+			"inputs": [
+				"package.json",
+				"../../crates/core/**",
+				"../../crates/crypto/**",
+				"../../crates/repo/**",
+				"../../crates/share-protocol/**",
+				"../../Cargo.toml",
+				"../../Cargo.lock",
+				"../../rustfmt.toml"
+			],
+			"outputs": ["dist/**"]
+		},
+		"@opfs/core-wasm#typecheck": {
+			"dependsOn": ["@opfs/core-wasm#build"],
+			"outputs": []
+		},
 		"dev": {
 			"cache": false,
 			"persistent": true

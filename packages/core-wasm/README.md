@@ -1,31 +1,45 @@
 # @opfs/core-wasm
 
-Generated wasm-bindgen wrapper around the [`opfs-core`](../../crates/core)
-Rust crate. JS / TS code in this repo and any downstream project consumes
-the Rust crypto + repo + share-protocol surfaces exclusively through this
-package — never via direct `crates/*` imports.
+The wasm-bindgen wrapper around the [`opfs-core`](../../crates/core)
+Rust crate. JS / TS code in this repo and any downstream project
+consumes the Rust crypto + repo + share-protocol surfaces exclusively
+through this package — never via direct `crates/*` imports.
 
-## Status
+## Public surface
 
-Stub. The wasm artifact, `wasm-pack` build wiring, and the generated
-`.d.ts` files are added in a follow-up PR. The current `src/index.ts`
-exposes only the constants that the rest of the JS workspace needs at
-compile time (`PROTOCOL_VERSION`, `X25519_PUBKEY_LEN`,
-`AES_GCM_NONCE_LEN`, `COMMITMENT_CODE_LEN`).
+```ts
+import init, {
+	codeForPubkey,
+	verifyCode,
+	protocolVersion,
+	x25519PubkeyLen,
+	commitmentCodeLen,
+} from "@opfs/core-wasm";
 
-## How it will work
-
-```sh
-wasm-pack build crates/core \
-  --target web \
-  --out-dir packages/core-wasm/dist
+await init(); // loads the .wasm binary
+const code = codeForPubkey(epkBytes);
+verifyCode(code, epkBytes); // true
 ```
 
-The Turbo pipeline will encode `packages/core-wasm#build` as depending on
-the cargo build, and downstream packages (`@opfs/auth`, `@opfs/storage`)
-will depend on `@opfs/core-wasm#build`.
+Only the share-rendezvous commitment helpers are exposed today. The
+crypto vault surface (DEK lifecycle, row encrypt/decrypt) and the SQL
+schema entry point land alongside the WebAuthn PRF + storage PRs.
+
+## Build
+
+`dist/` is gitignored. The Turbo task graph runs
+`pnpm --filter @opfs/core-wasm build` (which shells out to `wasm-pack
+build crates/core --target web --release`) before any downstream
+typecheck or build that depends on this package.
+
+Manually:
+
+```sh
+pnpm --filter @opfs/core-wasm build
+```
 
 ## Reuse
 
-Other apps that want the same Rust primitives import this package and the
-`wasm-pack` artifact directly; they do not need the rest of `opfs-webauthn`.
+The crate is the only bridge to Rust. Other apps that want the same
+primitives import this package; the `dist/` artifact + the
+[`opfs-core`](../../crates/core) crate ride along.

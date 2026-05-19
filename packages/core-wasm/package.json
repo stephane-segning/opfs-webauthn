@@ -16,6 +16,8 @@
 		"dist"
 	],
 	"scripts": {
+		"build": "wasm-pack build ../../crates/core --target web --out-dir ../../packages/core-wasm/dist --out-name opfs_core --release",
+		"clean": "rm -rf dist",
 		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {

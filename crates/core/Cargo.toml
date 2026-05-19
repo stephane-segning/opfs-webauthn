@@ -13,7 +13,16 @@ workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# Disable wasm-opt for now: modern Rust emits bulk-memory ops that the
+# homebrew wasm-opt 0.121 in our toolchain rejects without
+# `--enable-bulk-memory-opt`. We give up a few percent of code size in
+# exchange for a stable build until either binaryen catches up or we
+# pin a specific wasm-opt version with the feature flag.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
 [dependencies]
 opfs-crypto = { path = "../crypto" }
 opfs-repo = { path = "../repo" }
 opfs-share-protocol = { path = "../share-protocol" }
+wasm-bindgen = "0.2"
