@@ -30,7 +30,14 @@ Use the official **`sqlite-wasm`** build with the **`opfs-sahpool`** VFS.
   `core_wasm.current_schema_sql()` on boot and runs migrations before
   accepting requests.
 - Note bodies and titles are stored as `BLOB` ciphertext + `BLOB` nonce.
-  Indexed columns (id, created_at, updated_at, archived) are plaintext.
+- Indexed columns (id, archived, and **day-quantized** created_at /
+  updated_at) are plaintext. We deliberately **do not** store full
+  timestamps in plaintext: an attacker with disk-level access could
+  reconstruct activity patterns from precise timestamps. We quantize
+  to 24h buckets on disk and store the full timestamp inside the
+  encrypted blob, decrypting for any UI surface that needs precision.
+  Day-precision is enough for "sort newest first" and pagination
+  without leaking the user's working hours or burst patterns.
 - Full-text search is implemented over a transient in-memory index
   rebuilt from the decrypted set on load. We do not store an FTS5 index
   of plaintext on disk.
@@ -46,6 +53,12 @@ Use the official **`sqlite-wasm`** build with the **`opfs-sahpool`** VFS.
 - We trade on-disk FTS for simplicity and confidentiality. Rebuilding the
   search index in memory is O(notes); we accept this until the corpus
   exceeds a few thousand notes.
+- Day-quantized timestamps mean the disk view of "when was each note
+  last touched" has 24h granularity. Inside the UI it still looks
+  exact, because the precise timestamp lives in the encrypted blob.
+  This is the only metadata privacy trade-off we accept; it is called
+  out here so future "let's index more fields in plaintext" suggestions
+  hit this paragraph first.
 - Migrations are linear and owned by Rust. The schema version is stored
   in a `meta` table.
 

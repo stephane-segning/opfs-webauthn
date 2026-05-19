@@ -25,9 +25,14 @@ The MVP is what we commit to shipping to GitHub Pages as the first
 
 ### Storage
 - SQLite database file persisted in OPFS.
-- Per-row encryption of note content (body + title) using a DEK derived
-  from the PRF output.
-- Row IDs and timestamps are stored in plaintext to allow indexing.
+- Per-row encryption of note content (body + title) using a random
+  per-vault **DEK**. The DEK is wrapped at rest with a **KEK** derived
+  from the WebAuthn PRF output (see ADR 0005 for the full key
+  hierarchy); the PRF output is never used directly as the
+  content-encryption key.
+- Row IDs are stored in plaintext; timestamps are quantized to 24h
+  buckets on disk and stored at full precision inside the encrypted
+  blob (see ADR 0004 for the metadata-leak trade-off).
 
 ### Sync (local)
 - Multi-tab safety: two tabs in the same browser do not corrupt the DB and

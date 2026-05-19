@@ -27,8 +27,11 @@ of a debate.
 - **Browser support outside the WebAuthn-PRF set.** We require a browser
   that supports the PRF extension. We show a clear unsupported message
   elsewhere and do not attempt to polyfill.
-- **i18n in the MVP.** English copy only. Strings live in a single module
-  so a later i18n pass is easy.
+- **Translations in the MVP.** English copy only. But user-facing
+  strings are externalised into `next-intl` message files from day one
+  so adding a locale later is a translation pass, not a refactor. The
+  non-goal is "ship more than one locale", not "wire up the i18n
+  toolchain".
 
 ## Deferred (likely yes, but not now)
 

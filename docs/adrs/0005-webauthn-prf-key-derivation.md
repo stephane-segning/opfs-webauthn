@@ -56,6 +56,32 @@ leaving the authenticator.
 5. From here on, every encrypt/decrypt operation goes through the WASM
    crypto module using the in-memory DEK.
 
+### Worker eviction and mobile background suspension
+
+Both `SharedWorker` and dedicated workers can be killed by the browser
+under memory pressure. On mobile, background tabs can be paused for
+long stretches, so heartbeats from a backgrounded tab will look like
+idleness even if the user comes back two seconds later. We therefore
+treat **DEK loss as an expected event, not a failure**:
+
+- Any RPC call from a page to the worker that comes back with a
+  `vault-locked` (or fails because the worker exited) puts the UI into
+  the "unlock" state with no data loss. The page does **not** discard
+  in-progress edits; it keeps them in component state until the next
+  successful write.
+- Unsaved draft text is also mirrored to a small `drafts` table in
+  OPFS (encrypted at flush, or stored under a per-tab session key for
+  the immediate "I was typing" window). On unlock, the editor restores
+  the draft transparently. No "lost my note" surprise.
+- The UI distinguishes locked-because-idle (silent return to unlock
+  screen, friendly copy) from locked-because-worker-died (toast
+  explaining that we re-locked the vault and the user's draft is
+  safe). Both paths take exactly one biometric prompt to resume.
+- We assume mobile background timers are unreliable and rely on
+  *foreground* activity to feed the idle clock: a tab that has not
+  been visible at all for the idle window is treated as idle, even
+  if it stopped sending heartbeats earlier than expected.
+
 ### Rotation
 
 - A future ADR will cover DEK rotation (re-encrypt all rows under a new
