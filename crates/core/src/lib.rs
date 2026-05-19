@@ -79,7 +79,10 @@ pub fn code_for_pubkey(epk: &[u8]) -> String {
 #[wasm_bindgen(js_name = verifyCode)]
 #[must_use]
 pub fn verify_code(code: &str, epk: &[u8]) -> bool {
-    if epk.len() != opfs_share_protocol::X25519_PUBKEY_LEN {
+    // Short-circuit on either bad length so we never hash a wrong-sized
+    // key just to reject it; `commitment::verify_code` would catch the
+    // code-length case anyway, but failing fast here is friendlier.
+    if epk.len() != opfs_share_protocol::X25519_PUBKEY_LEN || code.len() != commitment::CODE_LEN {
         return false;
     }
     commitment::verify_code(code, epk).is_ok()
