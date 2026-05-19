@@ -14,14 +14,22 @@ choice in this repo.
 ```
 .
 ├── apps/
-│   └── web/                 Next.js app (static-exported to GitHub Pages)
-├── packages/                JS/TS workspace packages (added per ADR 0010)
-├── crates/                  Rust workspace crates (added per ADR 0010)
+│   ├── web/                 Next.js app (static-exported to GitHub Pages)
+│   └── share-backend/       Cloudflare Worker rendezvous (ADR 0007)
+├── packages/                JS/TS workspace packages (ADR 0010)
+│   ├── auth/                WebAuthn PRF ceremonies
+│   ├── core-wasm/           wasm-bindgen surface over the Rust crates
+│   ├── design-tokens/       Shared CSS variables
+│   ├── share-client/        Page-side share orchestration
+│   ├── state/               Zustand stores (notes, …)
+│   └── storage/             sqlite-wasm/OPFS writer + typed RPC
+├── crates/                  Rust workspace (ADR 0010)
+│   ├── core/                wasm-bindgen entry point
+│   ├── crypto/              AES-GCM, HKDF, BLAKE3 commitment, X25519 share
+│   ├── repo/                Pure-Rust row model
+│   └── share-protocol/      CBOR envelope types
 └── docs/                    PRD + ADRs
 ```
-
-`apps/share-backend` (Cloudflare Workers, see ADR 0007) and the
-`packages/*` / `crates/*` directories are landed in follow-up PRs.
 
 ## Development
 
