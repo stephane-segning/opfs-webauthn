@@ -120,6 +120,19 @@ importers:
         specifier: ^5.8.2
         version: 5.9.3
 
+  packages/share-client:
+    dependencies:
+      '@opfs/core-wasm':
+        specifier: workspace:*
+        version: link:../core-wasm
+    devDependencies:
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@20.19.41)(lightningcss@1.32.0)
+
   packages/state:
     dependencies:
       '@opfs/auth':
