@@ -29,19 +29,46 @@ a Node runtime. We must reconcile these.
   `wrangler` for local + deploy). Cloudflare's free tier covers the
   expected research traffic, has KV / R2 for the encrypted-blob staging,
   and global edge presence.
+- The flow is **recipient-first**, so we never need a global, queryable
+  pubkey directory the sender browses by identity. There is no "look up
+  someone else's key by handle." A share session is a short-lived
+  rendezvous identified by an opaque code that the human user transfers
+  out of band (read it off the recipient screen onto the sender screen).
 - Endpoints (sketch, finalized in a later ADR):
-  - `POST /share` — accepts an opaque encrypted blob + recipient
-    public-key fingerprint; returns a short pickup code and a TTL.
-  - `GET /share/:code` — returns the blob if it exists and has not
-    expired; deletes on first successful read.
-  - `GET /pubkey/:fingerprint` — published public key for a device, so a
-    sender can wrap to it.
-- The backend stores **only ciphertext**. It never sees plaintext, the
-  DEK, or the PRF output. We document this and add a server-side
-  integration test that asserts requests are rejected if they contain
-  anything claiming to be plaintext (best-effort, ciphertext is opaque).
+  - `POST /rendezvous` — recipient device starts here. The request
+    body carries the recipient's **ephemeral X25519 public key** plus
+    a WebAuthn assertion (the same passkey, signing the SHA-256 of the
+    public key as the challenge). The worker verifies the assertion
+    against the credential bound to *that* rendezvous's vault key
+    record, mints a short pickup code (8 chars, base32), and stores
+    `{code, ephemeralPubkey, credentialId, expiresAt}` in KV with a
+    short TTL (default 5 minutes).
+  - `GET /rendezvous/:code` — sender device fetches the ephemeral
+    pubkey by code, derives a shared secret, encrypts the note blob to
+    that public key (HPKE-style, X25519 + HKDF + AES-256-GCM in the
+    Rust crypto crate), and posts the result.
+  - `POST /rendezvous/:code/blob` — sender uploads the encrypted blob.
+    The worker rejects writes if the rendezvous is expired or already
+    has a blob.
+  - `GET /rendezvous/:code/blob` — recipient pulls the blob exactly
+    once. The worker deletes it on first successful read.
+- **No long-lived pubkey registry.** Each rendezvous carries its own
+  ephemeral key pair, so there is nothing to authenticate-by-overwriting
+  later. The MitM surface area collapses to "the human typed the right
+  8-character code into the right device", and the pickup code is
+  bound to the specific ephemeral key at mint time.
+- WebAuthn assertion on `POST /rendezvous` guarantees that only a
+  passkey-holder can stand up a rendezvous; the backend still does not
+  learn who the user is across rendezvous (we deliberately do not link
+  credentialIds across sessions).
+- The backend stores **only ciphertext** and short metadata. It never
+  sees plaintext, the DEK, or the PRF output. We document this and add
+  a server-side integration test that asserts requests carrying
+  non-opaque bodies are rejected (best-effort, ciphertext is opaque).
 - Pickup codes are short (8 chars, base32) with rate-limited brute force
-  protection and a default TTL of 15 minutes.
+  protection and a default TTL of 5 minutes. Brute-forcing the code
+  before expiry still only buys the attacker an ephemeral pubkey, not
+  the plaintext.
 
 ### Why two deployment targets
 

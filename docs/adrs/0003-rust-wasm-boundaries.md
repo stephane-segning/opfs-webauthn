@@ -53,8 +53,23 @@ Nothing else in `apps/web` or `packages/ui` may import directly from
   entire class of OPFS-VFS bugs by reusing the official build.
 - The cost is one extra hop per query: Rust returns "the SQL + parameters
   to run", JS executes against sqlite-wasm, JS hands rows back to Rust for
-  decryption. We accept this for the MVP and revisit if profiling shows it
-  matters.
+  decryption. To keep this from becoming a hot-path bottleneck we commit
+  to three rules from day one:
+  - **Batch crossings.** The crypto API is row-set oriented
+    (`decrypt_rows(blobs[]) -> rows[]`), not row-at-a-time. We never
+    call into WASM in a per-row loop from JS.
+  - **Zero-copy where possible.** Ciphertext and plaintext travel as
+    `Uint8Array` views into the WASM linear memory; we copy out only at
+    the React state boundary.
+  - **Hot reads stay in the worker.** The dedicated worker that owns
+    sqlite-wasm (see ADR 0006) is also where the WASM crypto module is
+    instantiated. Page <-> worker has one `postMessage`; WASM <-> JS
+    inside the worker is a function call. The "double crossing" cited
+    in early review happens inside a single worker process and is
+    cheap.
+  We profile the initial vault-load decryption (the worst case, all
+  notes at once) as the first perf checkpoint and revisit if it exceeds
+  a budget defined in the perf ADR.
 - The DEK never crosses the WASM/JS boundary as plaintext. JS can request
   encrypt/decrypt operations but cannot exfiltrate the key.
 - The `wasm-bindgen` bridge becomes the public, audited API surface of

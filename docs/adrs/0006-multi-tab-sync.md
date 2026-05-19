@@ -19,7 +19,8 @@ We must:
 
 A single **SharedWorker** owns the sqlite-wasm instance and its OPFS
 handles. Every page (every tab, every PWA window) connects to that
-SharedWorker and talks to it via a typed RPC over `MessagePort`.
+SharedWorker and talks to it via a typed RPC over the dedicated
+`MessagePort` returned by `SharedWorker.port`.
 
 - The SharedWorker is the **sole writer**. Tabs send queries; the worker
   runs them and replies.
@@ -30,6 +31,11 @@ SharedWorker and talks to it via a typed RPC over `MessagePort`.
   Tabs subscribe and refresh their Zustand store's affected slices.
 - On every read, the page passes a small cache hint (`since` token) so
   the worker can answer "nothing changed for you" cheaply.
+- **Transport rule.** `BroadcastChannel` is reserved for *fan-out
+  notifications* (`tx-applied`, `vault-locked`, `leader-elected`).
+  Request/response RPC always rides a private `MessagePort` so requests
+  do not have to be filtered out by every listening tab and we get
+  native back-pressure per channel.
 
 ### Fallback: no SharedWorker
 
@@ -40,10 +46,16 @@ pattern using the Web Locks API:
 - Each tab attempts to take a named lock (`opfs-db-writer`).
 - The tab that holds the lock becomes the leader and spawns a dedicated
   Worker that owns sqlite-wasm.
-- Non-leader tabs proxy their RPC over `BroadcastChannel` to the leader.
+- The leader announces itself on a `BroadcastChannel` (`leader-elected`,
+  with a per-leader UUID). Non-leader tabs respond with a `pair-request`
+  carrying one end of a freshly created `MessageChannel`; the leader
+  keeps the matching port and answers RPC over that private channel.
+  **BroadcastChannel is only used for discovery + fan-out**, never for
+  RPC payloads.
 - When the leader tab closes, the lock releases, another tab takes it
-  and becomes the new leader. In flight requests are retried by the
-  client RPC layer.
+  and becomes the new leader. The new leader re-announces and every
+  client re-pairs with a fresh `MessageChannel`. In-flight requests are
+  retried once by the client RPC layer with the same request ID.
 
 ### RPC layer
 

@@ -23,17 +23,28 @@ leaving the authenticator.
    - `credentialId` (plaintext, in OPFS metadata file).
    - `prfSalt` (the random salt A, plaintext).
    - We do **not** persist the PRF output.
-4. We immediately call `navigator.credentials.get(...)` with the same
-   `prf.eval.first` to obtain the PRF output (some authenticators do not
-   return PRF results on `create`).
+4. **Inspect the `create` response for PRF output first.** Modern
+   authenticators (and the spec) return the PRF result inline as
+   `getClientExtensionResults().prf.results.first` on `create`. If we
+   find it there, we proceed straight to step 5 — **no second biometric
+   prompt**. Only when the result is missing (older authenticator
+   firmware, or a UA that strips the result on `create`) do we fall
+   back to a follow-up `navigator.credentials.get(...)` with the same
+   salt. The UI signals when the fallback is happening so the user
+   understands the extra prompt.
 5. We generate a random 256-bit **DEK** (data encryption key) in Rust.
 6. We derive a **KEK** (key encryption key) from the PRF output via
    HKDF-SHA-256 with a context string `"opfs-webauthn/v1/kek"`.
 7. We wrap the DEK with the KEK using AES-256-GCM and a fresh random
    nonce. We persist `{wrappedDek, nonce}` in OPFS metadata.
-8. The unwrapped DEK lives only in WASM linear memory and is zeroed when
-   the tab is hidden for longer than a configurable idle timeout (default
-   5 minutes).
+8. The unwrapped DEK lives only in WASM linear memory and is zeroed on
+   a **shared idle policy** owned by the writer worker (see ADR 0006).
+   The worker tracks the last-activity timestamp across every connected
+   tab (each tab sends a heartbeat while focused). Once no tab has been
+   active for the configured idle window (default 5 minutes) the worker
+   zeroizes the DEK and broadcasts `vault-locked` so every tab routes
+   to the unlock screen at the same moment. A single tab going
+   background does not, by itself, lock the vault.
 
 ### Unlock
 

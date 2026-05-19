@@ -34,12 +34,22 @@ The MVP is what we commit to shipping to GitHub Pages as the first
   see each other's writes.
 
 ### Sharing (cross-device)
-- A "share to another device" action produces a one-time pickup code.
-- The other device, already enrolled with its own passkey, can claim the
-  code and receive the encrypted blob.
-- The blob is wrapped with an ephemeral key exchange (sender encrypts to
-  recipient's published public key) so the backend only sees ciphertext.
-- Recipient inserts the decrypted note into its own DB.
+- Sharing is a **recipient-first rendezvous**, not a sender-initiated
+  push to a directory of users.
+- On the recipient device, the user taps "Receive on this device". The
+  recipient generates a fresh ephemeral X25519 keypair, authenticates
+  the request with its own passkey, and the backend returns a short
+  8-character pickup code (5-minute TTL).
+- The user reads the code out loud or types it on the sender device.
+- The sender device fetches the recipient's ephemeral public key by
+  code, derives a shared secret, encrypts the note's plaintext with
+  AES-256-GCM under that secret, and uploads the ciphertext.
+- The recipient device pulls the blob exactly once, decrypts it
+  locally, and inserts it into its own DB. The backend deletes the
+  blob on first read and the pickup code expires.
+- The backend never holds anything other than the ephemeral public
+  key, the encrypted blob, and short metadata; no long-lived directory
+  of "who is who".
 
 ### PWA / offline
 - Installable manifest with icons.
@@ -67,7 +77,10 @@ on a single note.
 - [ ] Reload page → vault unlocks with one biometric tap.
 - [ ] Two tabs open → edits in one appear in the other within ~500ms with
       no DB corruption under stress (rapid alternating writes).
-- [ ] Send a note from device A to device B → device B sees the note
-      decrypted; the backend log shows only ciphertext.
+- [ ] Receive on device B → 8-character code shown. Type code on
+      device A → pick a note → "send" → device B sees the note
+      decrypted; the backend log shows only the ephemeral pubkey and
+      the ciphertext blob; the rendezvous record is gone after the
+      recipient pull.
 - [ ] App installs as a PWA on iOS Safari and Android Chrome.
 - [ ] All ADRs marked Accepted reflect the shipped behaviour.

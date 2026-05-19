@@ -46,10 +46,12 @@ Two audiences, in order of priority:
   is offline-first; writes hit local OPFS immediately.
 - **Multi-tab.** Two tabs open in the same browser stay consistent without
   conflict or DB corruption.
-- **Cross-device share.** A "share" action on a note produces a short
-  code / link the user opens on another device that has its own enrolled
-  passkey; the second device receives the encrypted blob through the
-  backend, decrypts it locally, and inserts it as a note.
+- **Cross-device share.** The recipient device first taps "Receive on
+  this device", authenticates with its passkey, and is shown a short
+  pickup code. The user enters that code on the sender device, picks a
+  note, and sends it. The sender encrypts to a fresh ephemeral
+  recipient pubkey (HPKE-style) so the backend only relays opaque
+  ciphertext; the recipient pulls and decrypts locally.
 - **Install as PWA.** Works installed, on mobile, offline, after first
   network load.
 
