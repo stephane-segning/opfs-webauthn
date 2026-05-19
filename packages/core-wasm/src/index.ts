@@ -37,6 +37,9 @@ export {
 	EnrollResult,
 	initSync,
 	protocolVersion,
+	RecipientHandle,
+	SealedShare,
+	sealShare,
 	verifyCode,
 	x25519PubkeyLen,
 } from "../dist/opfs_core.js";
