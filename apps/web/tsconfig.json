@@ -3,11 +3,7 @@
 	"compilerOptions": {
 		"jsx": "preserve",
 		"plugins": [{ "name": "next" }],
-		"incremental": true,
-		"baseUrl": ".",
-		"paths": {
-			"@sse/*": ["./src/*"]
-		}
+		"incremental": true
 	},
 	"include": [
 		"next-env.d.ts",
@@ -17,5 +13,5 @@
 		"**/*.js",
 		".next/types/**/*.ts"
 	],
-	"exclude": ["node_modules", "generated", ".next"]
+	"exclude": ["node_modules", "generated", ".next", "out"]
 }

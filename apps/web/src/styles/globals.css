@@ -1,7 +1,89 @@
 @import "tailwindcss";
 
-@theme {
-	--font-sans:
-		var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif,
-		"Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+/* App-shell styles use the design tokens shipped in @opfs/design-tokens. */
+
+body {
+	margin: 0;
+	background: var(--surface-page);
+	color: var(--text-primary);
+	font-family: var(--font-ui);
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	min-height: 100dvh;
+}
+
+.auth-screen {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 100dvh;
+	padding: var(--space-5);
+}
+
+.auth-card {
+	width: 100%;
+	max-width: 28rem;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-5);
+	padding: var(--space-6);
+	background: var(--surface-card);
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-lg);
+}
+
+.auth-tag {
+	margin: 0;
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	color: var(--text-muted);
+	letter-spacing: 0.04em;
+}
+
+.auth-card h1 {
+	margin: var(--space-2) 0 var(--space-3);
+	font-size: 1.5rem;
+	line-height: 1.25;
+	font-weight: 600;
+}
+
+.auth-blurb {
+	margin: 0;
+	color: var(--text-secondary);
+	line-height: 1.55;
+}
+
+.auth-cta {
+	appearance: none;
+	border: 0;
+	cursor: pointer;
+	width: 100%;
+	padding: var(--space-3) var(--space-4);
+	background: var(--accent);
+	color: var(--accent-contrast);
+	border-radius: var(--radius-md);
+	font: inherit;
+	font-weight: 600;
+	transition: filter var(--motion-medium);
+}
+
+.auth-cta:hover:not(:disabled) {
+	filter: brightness(1.05);
+}
+
+.auth-cta:focus-visible {
+	outline: none;
+	box-shadow: var(--focus-ring);
+}
+
+.auth-cta:disabled {
+	cursor: not-allowed;
+	opacity: 0.55;
+}
+
+.auth-foot {
+	margin: 0;
+	font-size: 0.85rem;
+	color: var(--text-muted);
+	text-align: center;
 }
