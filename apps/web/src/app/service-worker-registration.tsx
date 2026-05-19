@@ -6,6 +6,11 @@ import pkg from "../../package.json";
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const BUILD_ID = pkg.version;
+// `next dev` rebuilds `_next/static/*` chunks on every change. The
+// SW caches them cache-first, which would serve stale code until the
+// worker is manually cleared. So we register only in production
+// builds — dev gets normal HMR, prod gets offline support.
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 /**
  * Client-only service-worker registration. Mounted once from the
@@ -14,6 +19,7 @@ const BUILD_ID = pkg.version;
  */
 export function ServiceWorkerRegistration() {
 	useEffect(() => {
+		if (!IS_PRODUCTION) return;
 		if (typeof navigator === "undefined" || !("serviceWorker" in navigator))
 			return;
 		const url = `${BASE_PATH}/sw.js?v=${encodeURIComponent(BUILD_ID)}`;

@@ -17,8 +17,9 @@
  * don't want a half-updated page if multiple tabs are open.
  */
 
+const CACHE_PREFIX = "opfs-webauthn-";
 const BUILD_ID = new URL(self.location.href).searchParams.get("v") || "dev";
-const CACHE_NAME = `opfs-webauthn-${BUILD_ID}`;
+const CACHE_NAME = `${CACHE_PREFIX}${BUILD_ID}`;
 
 function isImmutable(url) {
 	return (
@@ -42,9 +43,13 @@ self.addEventListener("activate", (event) => {
 	event.waitUntil(
 		(async () => {
 			const keys = await caches.keys();
-			await Promise.all(
-				keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)),
+			// Scope the cleanup to this app's namespace — `CacheStorage` is
+			// shared per origin, and on hosts like `*.github.io` other
+			// PWAs may have their own caches we must not touch.
+			const ours = keys.filter(
+				(k) => k.startsWith(CACHE_PREFIX) && k !== CACHE_NAME,
 			);
+			await Promise.all(ours.map((k) => caches.delete(k)));
 			await self.clients.claim();
 		})(),
 	);

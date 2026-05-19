@@ -16,7 +16,7 @@ export const metadata: Metadata = {
 	icons: [
 		{ rel: "icon", url: `${BASE_PATH}/favicon.ico` },
 		{ rel: "icon", url: `${BASE_PATH}/icon.svg`, type: "image/svg+xml" },
-		{ rel: "apple-touch-icon", url: `${BASE_PATH}/icon.svg` },
+		{ rel: "apple-touch-icon", url: `${BASE_PATH}/apple-touch-icon.png` },
 	],
 	applicationName: "opfs-webauthn",
 	appleWebApp: {
