@@ -95,40 +95,66 @@ pub struct SealedShare {
     pub ciphertext: Vec<u8>,
 }
 
-/// Encrypt `plaintext` under the recipient's X25519 public key.
+/// Encrypt `plaintext` under the recipient's X25519 public key,
+/// with caller-supplied randomness.
 ///
-/// The returned `SealedShare` is safe to send to the (untrusted)
-/// rendezvous backend. Only the holder of the matching
-/// `RecipientSecret` can decrypt it.
+/// Splitting the entropy step out of `seal` lets the WASM bindings
+/// fetch their randomness via fallible `getrandom` calls and surface
+/// failures as typed errors, instead of panicking deep inside an
+/// `RngCore::fill_bytes` call. Host-side callers that already have
+/// an `RngCore + CryptoRng` should use `seal` and let it handle the
+/// entropy plumbing.
 #[allow(
     clippy::similar_names,
     reason = "sender_sk/sender_pk/recipient_pk are protocol-defined names"
 )]
-pub fn seal(
+pub fn seal_with_components(
     recipient_pubkey: &[u8; X25519_PUBKEY_LEN],
     plaintext: &[u8],
     info: &[u8],
-    rng: &mut (impl RngCore + CryptoRng),
+    sender_secret_bytes: &[u8; X25519_SECRET_LEN],
+    nonce: &[u8; NONCE_LEN],
 ) -> Result<SealedShare, ShareError> {
-    let sender_sk = StaticSecret::random_from_rng(&mut *rng);
+    let sender_sk = StaticSecret::from(*sender_secret_bytes);
     let sender_pk = PublicKey::from(&sender_sk);
     let sender_pk_bytes = *sender_pk.as_bytes();
 
     let dh = sender_sk.diffie_hellman(&PublicKey::from(*recipient_pubkey));
     let key = derive_share_key(dh.as_bytes(), &sender_pk_bytes, recipient_pubkey, info)?;
 
-    let mut nonce = [0u8; NONCE_LEN];
-    rng.fill_bytes(&mut nonce);
-
     let aad = aad_bytes(&sender_pk_bytes, recipient_pubkey, info);
     let aead = Aead::new(&key);
-    let ciphertext = aead.encrypt(&nonce, &aad, plaintext)?;
+    let ciphertext = aead.encrypt(nonce, &aad, plaintext)?;
 
     Ok(SealedShare {
         sender_pubkey: sender_pk_bytes,
-        nonce,
+        nonce: *nonce,
         ciphertext,
     })
+}
+
+/// Convenience wrapper around [`seal_with_components`] that draws
+/// the sender's ephemeral secret and nonce from `rng`.
+///
+/// Caller-side entropy failures are an infallible-API panic — use
+/// `seal_with_components` directly if you need typed errors.
+pub fn seal(
+    recipient_pubkey: &[u8; X25519_PUBKEY_LEN],
+    plaintext: &[u8],
+    info: &[u8],
+    rng: &mut (impl RngCore + CryptoRng),
+) -> Result<SealedShare, ShareError> {
+    let mut sender_secret_bytes = Zeroizing::new([0u8; X25519_SECRET_LEN]);
+    rng.fill_bytes(sender_secret_bytes.as_mut());
+    let mut nonce = [0u8; NONCE_LEN];
+    rng.fill_bytes(&mut nonce);
+    seal_with_components(
+        recipient_pubkey,
+        plaintext,
+        info,
+        &sender_secret_bytes,
+        &nonce,
+    )
 }
 
 /// Decrypt a `SealedShare` using the recipient's secret. Returns the

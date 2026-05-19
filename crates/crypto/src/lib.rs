@@ -21,7 +21,7 @@ pub use hkdf::{HkdfError, derive_kek};
 pub use key::{Key, KeyError};
 pub use share::{
     RecipientSecret, SealedShare, ShareError, X25519_PUBKEY_LEN, X25519_SECRET_LEN,
-    open as share_open, seal as share_seal,
+    open as share_open, seal as share_seal, seal_with_components as share_seal_with_components,
 };
 
 /// Length in bytes of the symmetric keys used everywhere in this crate.

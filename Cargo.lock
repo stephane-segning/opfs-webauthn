@@ -380,7 +380,6 @@ dependencies = [
  "opfs-crypto",
  "opfs-repo",
  "opfs-share-protocol",
- "rand_core",
  "wasm-bindgen",
  "zeroize",
 ]

@@ -269,11 +269,14 @@ pub struct RecipientHandle(core::RecipientHandle);
 #[wasm_bindgen]
 impl RecipientHandle {
     /// Mint a fresh recipient keypair. The matching public key is
-    /// the value to publish via `POST /rendezvous`.
+    /// the value to publish via `POST /rendezvous`. Throws if the
+    /// platform entropy source is unavailable — JS sees a recoverable
+    /// error rather than a wasm panic.
     #[wasm_bindgen(js_name = prepare)]
-    #[must_use]
-    pub fn prepare() -> Self {
-        Self(core::RecipientHandle::prepare())
+    pub fn prepare() -> Result<Self, JsError> {
+        core::RecipientHandle::prepare()
+            .map(Self)
+            .map_err(into_js_error)
     }
 
     /// The X25519 public key as raw 32 bytes — what the rendezvous

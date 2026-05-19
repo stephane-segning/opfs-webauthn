@@ -10,9 +10,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use opfs_crypto::{
     Aead, AeadError, HkdfError, KEY_LEN, Key, KeyError, NONCE_LEN, RecipientSecret, SealedShare,
-    ShareError, TAG_LEN, X25519_PUBKEY_LEN, derive_kek, share_open, share_seal,
+    ShareError, TAG_LEN, X25519_PUBKEY_LEN, X25519_SECRET_LEN, derive_kek, share_open,
+    share_seal_with_components,
 };
-use rand_core::OsRng;
 use zeroize::Zeroizing;
 
 /// Context label for the KEK derivation, per ADR 0005.
@@ -101,6 +101,7 @@ pub enum ShareVaultError {
     BadRecipientPubkeyLength { got: usize },
     BadSenderPubkeyLength { got: usize },
     BadShareNonceLength { got: usize },
+    Random,
     Share(ShareError),
 }
 
@@ -116,6 +117,7 @@ impl DisplayError for ShareVaultError {
             Self::BadShareNonceLength { got } => {
                 format!("nonce must be {NONCE_LEN} bytes, got {got}")
             }
+            Self::Random => String::from("entropy source (crypto.getRandomValues / OS RNG) failed"),
             Self::Share(e) => format!("share crypto failure: {e}"),
         }
     }
@@ -144,11 +146,16 @@ pub struct RecipientHandle {
 }
 
 impl RecipientHandle {
-    /// Mint a fresh recipient keypair.
-    pub fn prepare() -> Self {
-        Self {
-            secret: RecipientSecret::random(&mut OsRng),
-        }
+    /// Mint a fresh recipient keypair. Returns `ShareVaultError::Random`
+    /// if the platform entropy source (`crypto.getRandomValues` on
+    /// the web, OS RNG on host) is unavailable — keeps the failure
+    /// recoverable in JS instead of panicking the wasm module.
+    pub fn prepare() -> Result<Self, ShareVaultError> {
+        let mut bytes = Zeroizing::new([0u8; X25519_SECRET_LEN]);
+        getrandom::getrandom(bytes.as_mut()).map_err(|_| ShareVaultError::Random)?;
+        Ok(Self {
+            secret: RecipientSecret::from_bytes(*bytes),
+        })
     }
 
     /// Public key to publish via the rendezvous backend.
@@ -182,7 +189,10 @@ impl RecipientHandle {
 }
 
 /// Sender-side seal. Encrypts `plaintext` under `recipient_pubkey`
-/// using a fresh ephemeral X25519 keypair.
+/// using a fresh ephemeral X25519 keypair. Returns
+/// `ShareVaultError::Random` if the entropy source is unavailable —
+/// matching `CryptoVault::enroll`'s contract so JS sees a recoverable
+/// error rather than a wasm panic.
 pub fn seal_share(
     recipient_pubkey: &[u8],
     plaintext: &[u8],
@@ -192,7 +202,17 @@ pub fn seal_share(
             got: recipient_pubkey.len(),
         });
     };
-    Ok(share_seal(&pk, plaintext, SHARE_INFO, &mut OsRng)?)
+    let mut sender_secret = Zeroizing::new([0u8; X25519_SECRET_LEN]);
+    getrandom::getrandom(sender_secret.as_mut()).map_err(|_| ShareVaultError::Random)?;
+    let mut nonce = [0u8; NONCE_LEN];
+    getrandom::getrandom(&mut nonce).map_err(|_| ShareVaultError::Random)?;
+    Ok(share_seal_with_components(
+        &pk,
+        plaintext,
+        SHARE_INFO,
+        &sender_secret,
+        &nonce,
+    )?)
 }
 
 /// Pure Rust vault. The wasm-bindgen wrapper in `lib.rs` holds one of
@@ -474,7 +494,7 @@ mod tests {
 
     #[test]
     fn share_seal_open_roundtrip_recovers_plaintext() {
-        let recipient = RecipientHandle::prepare();
+        let recipient = RecipientHandle::prepare().unwrap();
         let recipient_pk = recipient.pubkey();
         let sealed = seal_share(&recipient_pk, b"hello share").expect("seal");
         let opened = recipient
@@ -485,8 +505,8 @@ mod tests {
 
     #[test]
     fn share_open_rejects_wrong_recipient() {
-        let alice = RecipientHandle::prepare();
-        let mallory = RecipientHandle::prepare();
+        let alice = RecipientHandle::prepare().unwrap();
+        let mallory = RecipientHandle::prepare().unwrap();
         let sealed = seal_share(&alice.pubkey(), b"to alice").unwrap();
         let err = mallory
             .open(&sealed.sender_pubkey, &sealed.nonce, &sealed.ciphertext)
@@ -496,7 +516,7 @@ mod tests {
 
     #[test]
     fn share_open_rejects_bad_input_lengths() {
-        let recipient = RecipientHandle::prepare();
+        let recipient = RecipientHandle::prepare().unwrap();
         let sealed = seal_share(&recipient.pubkey(), b"x").unwrap();
         // Wrong sender pubkey length.
         assert!(matches!(

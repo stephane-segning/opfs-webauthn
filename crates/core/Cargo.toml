@@ -33,7 +33,3 @@ zeroize = { workspace = true }
 # nonce are generated inside wasm so they never appear as JS-visible
 # byte buffers (ADR 0005).
 getrandom = { version = "0.2", features = ["js"] }
-# Share-flow seal/open in `opfs_crypto::share` takes an `RngCore +
-# CryptoRng`; pulling rand_core's `getrandom` feature gives us
-# `OsRng`, which routes through the same Web Crypto entropy source.
-rand_core = { workspace = true, features = ["getrandom"] }
