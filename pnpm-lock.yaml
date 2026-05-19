@@ -110,10 +110,16 @@ importers:
       '@opfs/core-wasm':
         specifier: workspace:*
         version: link:../core-wasm
+      '@sqlite.org/sqlite-wasm':
+        specifier: ^3.50.0-build1
+        version: 3.50.0-build1
     devDependencies:
       typescript:
         specifier: ^5.8.2
         version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@20.19.41)(lightningcss@1.32.0)
 
   packages/ui:
     dependencies:
@@ -723,6 +729,10 @@ packages:
     resolution: {integrity: sha512-QVTUovf40zgTqlFVrKA1uXMVvU2QWEFWfAH8Wdc48IxLvrJMQVMBRjuQyUpzZCDkakImib9eVazbWlC6ksWtJw==}
     cpu: [x64]
     os: [win32]
+
+  '@sqlite.org/sqlite-wasm@3.50.0-build1':
+    resolution: {integrity: sha512-h1ilVgUR3h1rGxglOyolwMYRf6Pj71iXadNGvSHhsYcmbRjIH5JXcFk729UyJ6Z3x82lFOYmy0wqW+iGefNVtQ==}
+    hasBin: true
 
   '@swc/helpers@0.5.15':
     resolution: {integrity: sha512-JQ5TuMi45Owi4/BIMAJBoSQoOJu12oOk/gADqlcUL9JEdHB8vyjUSsxqeNXnmXHjYKMi2WcYtezGEEhqUI/E2g==}
@@ -1633,6 +1643,8 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.60.4':
     optional: true
+
+  '@sqlite.org/sqlite-wasm@3.50.0-build1': {}
 
   '@swc/helpers@0.5.15':
     dependencies:
