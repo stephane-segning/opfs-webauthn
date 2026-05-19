@@ -19,8 +19,13 @@ rand_core = { workspace = true }
 zeroize = { workspace = true }
 subtle = { workspace = true }
 base32 = { workspace = true }
+x25519-dalek = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 hex-literal = { workspace = true }
 hex = { workspace = true }
+# Pull `OsRng` in for tests only — production callers must supply
+# their own RNG (the WASM build wires `OsRng` via `getrandom`'s
+# `js` feature in `crates/core`, not here).
+rand_core = { workspace = true, features = ["getrandom"] }

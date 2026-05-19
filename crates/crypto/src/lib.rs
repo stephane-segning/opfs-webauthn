@@ -13,11 +13,16 @@ pub mod aead;
 pub mod commitment;
 pub mod hkdf;
 pub mod key;
+pub mod share;
 
 pub use aead::{Aead, AeadError, NONCE_LEN, TAG_LEN};
 pub use commitment::{CommitmentError, code_for_pubkey, verify_code};
 pub use hkdf::{HkdfError, derive_kek};
 pub use key::{Key, KeyError};
+pub use share::{
+    RecipientSecret, SealedShare, ShareError, X25519_PUBKEY_LEN, X25519_SECRET_LEN,
+    open as share_open, seal as share_seal,
+};
 
 /// Length in bytes of the symmetric keys used everywhere in this crate.
 pub const KEY_LEN: usize = 32;
