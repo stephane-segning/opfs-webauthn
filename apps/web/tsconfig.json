@@ -13,5 +13,5 @@
 		"**/*.js",
 		".next/types/**/*.ts"
 	],
-	"exclude": ["node_modules", "generated", ".next", "out"]
+	"exclude": ["node_modules", "generated", ".next", "out", "public"]
 }
