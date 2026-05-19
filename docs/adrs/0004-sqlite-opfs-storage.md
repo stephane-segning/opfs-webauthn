@@ -36,15 +36,20 @@ Use the official **`sqlite-wasm`** build with the **`opfs-sahpool`** VFS.
   reconstruct activity patterns from precise timestamps. We quantize
   to 24h buckets on disk and store the full timestamp inside the
   encrypted blob, decrypting for any UI surface that needs precision.
-- **Row IDs are ULIDs** (Crockford base32, 26 chars, lex-sortable by
-  creation time). The ULID is the stable sort tiebreaker that the
-  day-bucket on its own cannot provide. The canonical list query is
-  `ORDER BY updated_day DESC, id DESC` which gives a deterministic
-  page boundary so `LIMIT/OFFSET` paginates correctly; notes touched
-  on the same day fall back to ULID lex order rather than insertion
-  order, but that is stable across requests. Within-day ordering by
-  exact timestamp is the UI's job after decryption and is only
-  applied to the visible page, not the global list.
+- **Row IDs are random 128-bit values** (Crockford base32 for display).
+  We deliberately do **not** use ULIDs or UUIDv7: their embedded
+  millisecond timestamp lives in the plaintext column and would defeat
+  the day-quantization we just paid for. Random 128-bit IDs leak no
+  timing information and are still a stable secondary sort because
+  they are byte-comparable.
+- The canonical list query is `ORDER BY updated_day DESC, id DESC`,
+  which gives a deterministic page boundary so `LIMIT/OFFSET`
+  paginates correctly. Notes touched on the same day fall back to a
+  random-but-stable lex order — readers will not see "today's notes"
+  in true edit order, but the order does not change between requests
+  and is not derived from timing data on disk. Within-day ordering by
+  exact timestamp is the UI's job after decryption and is only applied
+  to the visible page, not the global list.
 - Full-text search is implemented over a transient in-memory index
   rebuilt from the decrypted set on load. We do not store an FTS5 index
   of plaintext on disk.

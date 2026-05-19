@@ -57,15 +57,15 @@ a Node runtime. We must reconcile these.
   blindly would only prove "some passkey signed this", which the
   backend cannot tie to anyone meaningful. We therefore drop that
   check. Abuse prevention falls back to per-IP rate limits, short
-  TTLs, and the cost of cracking the 40-bit commitment within the TTL.
+  TTLs, and the cost of cracking the 60-bit commitment within the TTL.
 - Endpoints (sketch, finalized in a later ADR):
   - `POST /rendezvous` — recipient posts its ephemeral X25519 public
-    key. The worker computes `code = base32(truncate(BLAKE3(epk), 40))`,
+    key. The worker computes `code = base32(truncate(BLAKE3(epk), 60))`,
     rejects collisions inside the TTL window, and stores
     `{code, ephemeralPubkey, expiresAt}` in KV.
   - `GET /rendezvous/:code` — sender fetches the ephemeral pubkey by
     code. **The sender verifies `code == base32(truncate(BLAKE3(epk),
-    40))` locally before doing anything else.** It then derives a
+    60))` locally before doing anything else.** It then derives a
     shared secret (HPKE-X25519-HKDF-SHA256 + AES-256-GCM, implemented
     in the Rust crypto crate) and encrypts the note blob.
   - `POST /rendezvous/:code/blob` — sender uploads the encrypted

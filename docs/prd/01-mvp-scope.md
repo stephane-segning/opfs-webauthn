@@ -44,7 +44,7 @@ The MVP is what we commit to shipping to GitHub Pages as the first
 - On the recipient device, the user taps "Receive on this device". The
   recipient generates a fresh ephemeral X25519 keypair, authenticates
   the request with its own passkey, and the backend returns a short
-  8-character pickup code (5-minute TTL).
+  12-character pickup code (5-minute TTL).
 - The user reads the code out loud or types it on the sender device.
 - The sender device fetches the recipient's ephemeral public key by
   code, derives a shared secret, encrypts the note's plaintext with
@@ -82,7 +82,7 @@ on a single note.
 - [ ] Reload page → vault unlocks with one biometric tap.
 - [ ] Two tabs open → edits in one appear in the other within ~500ms with
       no DB corruption under stress (rapid alternating writes).
-- [ ] Receive on device B → 8-character code shown. Type code on
+- [ ] Receive on device B → 12-character code shown. Type code on
       device A → pick a note → "send" → device B sees the note
       decrypted; the backend log shows only the ephemeral pubkey and
       the ciphertext blob; the rendezvous record is gone after the
