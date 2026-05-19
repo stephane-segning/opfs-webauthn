@@ -1,0 +1,92 @@
+/* opfs-webauthn design tokens — see docs/adrs/0008-design-language.md.
+ *
+ * Light is the default; `[data-theme="dark"]` flips the surface ramp and
+ * adjusts the accent. The same surface ladder applies in both modes so
+ * components can reference a level without knowing the active theme.
+ */
+
+:root {
+	/* Type */
+	--font-ui: "Inter", system-ui, -apple-system, sans-serif;
+	--font-body: "iA Writer Quattro", "Inter", system-ui, sans-serif;
+	--font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+	/* Spacing scale (4px base) */
+	--space-1: 4px;
+	--space-2: 8px;
+	--space-3: 12px;
+	--space-4: 16px;
+	--space-5: 24px;
+	--space-6: 32px;
+	--space-7: 48px;
+	--space-8: 64px;
+
+	/* Radii */
+	--radius-sm: 6px;
+	--radius-md: 8px;
+	--radius-lg: 12px;
+	--radius-pill: 9999px;
+
+	/* Motion */
+	--motion-fast: 100ms;
+	--motion-medium: 180ms;
+	--motion-slow: 280ms;
+
+	/* Light theme (default) */
+	color-scheme: light;
+	--surface-page: #fbfaf7;
+	--surface-panel: #ffffff;
+	--surface-card: #ffffff;
+	--surface-overlay: rgba(20, 20, 22, 0.4);
+	--border-subtle: rgba(20, 20, 22, 0.08);
+	--border-strong: rgba(20, 20, 22, 0.16);
+	--text-primary: #14141a;
+	--text-secondary: #54545c;
+	--text-muted: #8a8a92;
+	--accent: #5b3fe0;
+	--accent-contrast: #ffffff;
+	--accent-soft: rgba(91, 63, 224, 0.12);
+	--focus-ring: 0 0 0 2px var(--surface-page), 0 0 0 4px var(--accent);
+}
+
+[data-theme="dark"] {
+	color-scheme: dark;
+	--surface-page: #0c0c10;
+	--surface-panel: #14141a;
+	--surface-card: #1c1c24;
+	--surface-overlay: rgba(0, 0, 0, 0.6);
+	--border-subtle: rgba(255, 255, 255, 0.06);
+	--border-strong: rgba(255, 255, 255, 0.14);
+	--text-primary: #ecebf2;
+	--text-secondary: #b4b3c0;
+	--text-muted: #76758a;
+	--accent: #7c5cff;
+	--accent-contrast: #0c0c10;
+	--accent-soft: rgba(124, 92, 255, 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme]) {
+		color-scheme: dark;
+		--surface-page: #0c0c10;
+		--surface-panel: #14141a;
+		--surface-card: #1c1c24;
+		--surface-overlay: rgba(0, 0, 0, 0.6);
+		--border-subtle: rgba(255, 255, 255, 0.06);
+		--border-strong: rgba(255, 255, 255, 0.14);
+		--text-primary: #ecebf2;
+		--text-secondary: #b4b3c0;
+		--text-muted: #76758a;
+		--accent: #7c5cff;
+		--accent-contrast: #0c0c10;
+		--accent-soft: rgba(124, 92, 255, 0.18);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	:root {
+		--motion-fast: 0ms;
+		--motion-medium: 0ms;
+		--motion-slow: 0ms;
+	}
+}
