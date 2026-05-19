@@ -1,7 +1,7 @@
 "use client";
 
 import type { Note, Repo } from "@opfs/storage";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Subscribe to the notes list for a given repo. Reloads on mount and
@@ -13,6 +13,12 @@ import { useCallback, useEffect, useState } from "react";
  * For very large vaults this is O(notes) per reload; when that
  * matters we can swap in virtualised pagination behind the same hook
  * signature.
+ *
+ * Reloads are last-writer-wins: a monotonically increasing generation
+ * counter marks each invocation, and only the latest one is allowed
+ * to publish state. This kills the race where a slow page-through
+ * over a large vault completes after a newer `tx-applied` reload and
+ * would otherwise overwrite fresh data with stale.
  */
 export type NotesState =
 	| { readonly status: "loading" }
@@ -41,16 +47,21 @@ export function useNotes(repo: Repo): {
 	readonly reload: () => Promise<void>;
 } {
 	const [state, setState] = useState<NotesState>({ status: "loading" });
+	const generationRef = useRef(0);
 
 	const reload = useCallback(async () => {
+		const generation = ++generationRef.current;
+		const isLatest = () => generationRef.current === generation;
 		try {
 			const notes = await loadAllNotes(repo);
-			setState({ status: "ready", notes });
+			if (isLatest()) setState({ status: "ready", notes });
 		} catch (err) {
-			setState({
-				status: "error",
-				error: err instanceof Error ? err : new Error(String(err)),
-			});
+			if (isLatest()) {
+				setState({
+					status: "error",
+					error: err instanceof Error ? err : new Error(String(err)),
+				});
+			}
 		}
 	}, [repo]);
 
