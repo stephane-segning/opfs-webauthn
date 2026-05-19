@@ -8,6 +8,15 @@ export type VaultCredential = {
 	readonly prfSalt: Uint8Array;
 	readonly wrappedDek: Uint8Array;
 	readonly wrapNonce: Uint8Array;
+	/**
+	 * The relying-party id that was bound into the credential at
+	 * enrollment time. `unlock` passes this verbatim to
+	 * `navigator.credentials.get`, so the browser finds the enrolled
+	 * credential even when the page is served from a sibling subdomain
+	 * (e.g. credential created for `example.com`, app served from
+	 * `notes.example.com`).
+	 */
+	readonly rpId: string;
 	readonly createdAt: number;
 };
 

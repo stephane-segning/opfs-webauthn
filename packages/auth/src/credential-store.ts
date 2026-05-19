@@ -14,6 +14,7 @@ type Serialized = {
 	readonly prfSalt: string;
 	readonly wrappedDek: string;
 	readonly wrapNonce: string;
+	readonly rpId: string;
 	readonly createdAt: number;
 };
 
@@ -23,6 +24,7 @@ function serialize(c: VaultCredential): Serialized {
 		prfSalt: bytesToBase64Url(c.prfSalt),
 		wrappedDek: bytesToBase64Url(c.wrappedDek),
 		wrapNonce: bytesToBase64Url(c.wrapNonce),
+		rpId: c.rpId,
 		createdAt: c.createdAt,
 	};
 }
@@ -39,6 +41,7 @@ function deserialize(raw: string): VaultCredential | null {
 		typeof obj.prfSalt !== "string" ||
 		typeof obj.wrappedDek !== "string" ||
 		typeof obj.wrapNonce !== "string" ||
+		typeof obj.rpId !== "string" ||
 		typeof obj.createdAt !== "number"
 	) {
 		return null;
@@ -49,6 +52,7 @@ function deserialize(raw: string): VaultCredential | null {
 			prfSalt: base64UrlToBytes(obj.prfSalt),
 			wrappedDek: base64UrlToBytes(obj.wrappedDek),
 			wrapNonce: base64UrlToBytes(obj.wrapNonce),
+			rpId: obj.rpId,
 			createdAt: obj.createdAt,
 		};
 	} catch {
