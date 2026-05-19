@@ -1,0 +1,84 @@
+# ADR 0005 — WebAuthn PRF key derivation
+
+- **Status**: Accepted
+- **Date**: 2026-05-19
+
+## Context
+
+We want a single, hardware-backed credential as the only way to unlock
+the vault. We do not want to store, transmit, or recover a password.
+WebAuthn passkeys with the **PRF extension** (`prf` — RP-controlled
+pseudo-random function evaluated inside the authenticator) give us a
+stable, high-entropy secret bound to a specific credential without ever
+leaving the authenticator.
+
+## Decision
+
+### Enrollment
+
+1. The user clicks "Create encrypted vault".
+2. JS calls `navigator.credentials.create({ ... publicKey: { extensions:
+   { prf: { eval: { first: <random salt A> } } } } })`.
+3. We persist:
+   - `credentialId` (plaintext, in OPFS metadata file).
+   - `prfSalt` (the random salt A, plaintext).
+   - We do **not** persist the PRF output.
+4. We immediately call `navigator.credentials.get(...)` with the same
+   `prf.eval.first` to obtain the PRF output (some authenticators do not
+   return PRF results on `create`).
+5. We generate a random 256-bit **DEK** (data encryption key) in Rust.
+6. We derive a **KEK** (key encryption key) from the PRF output via
+   HKDF-SHA-256 with a context string `"opfs-webauthn/v1/kek"`.
+7. We wrap the DEK with the KEK using AES-256-GCM and a fresh random
+   nonce. We persist `{wrappedDek, nonce}` in OPFS metadata.
+8. The unwrapped DEK lives only in WASM linear memory and is zeroed when
+   the tab is hidden for longer than a configurable idle timeout (default
+   5 minutes).
+
+### Unlock
+
+1. The user clicks "Unlock".
+2. JS calls `navigator.credentials.get({ ... allowCredentials: [stored
+   credentialId], extensions: { prf: { eval: { first: prfSalt } } } })`.
+3. We HKDF the PRF output into the KEK with the same context string.
+4. We AES-GCM-unwrap the DEK using the stored nonce.
+5. From here on, every encrypt/decrypt operation goes through the WASM
+   crypto module using the in-memory DEK.
+
+### Rotation
+
+- A future ADR will cover DEK rotation (re-encrypt all rows under a new
+  DEK, then rewrap with the same KEK). Not in MVP.
+- KEK rotation requires the user to re-enroll, since the KEK is bound to
+  the PRF output of a specific credential. We document this clearly.
+
+### Algorithm choices
+
+- **AES-256-GCM** for both DEK wrapping and per-row encryption.
+- **HKDF-SHA-256** for key derivation, with per-purpose context strings.
+- **Random nonces** for every encryption operation. We do not reuse
+  nonces under the same key. A future ADR may revisit this for
+  deterministic indexing of certain columns.
+
+## Consequences
+
+- The user has zero passwords and zero recovery codes. Losing every
+  device with the enrolled passkey loses the vault. The onboarding screen
+  makes this explicit.
+- No password-based brute force surface. The authenticator rate-limits.
+- We require a browser + authenticator that supports PRF. We feature-detect
+  and present a clear unsupported screen if not.
+- The DEK never appears in JS-land, including in service workers, the
+  React state tree, or Zustand. JS asks the WASM module to encrypt or
+  decrypt; the key stays inside.
+
+## Alternatives considered
+
+- **Password-derived key (PBKDF2/Argon2)**: simpler to recover from but
+  reintroduces a credential the user must remember and the server (or
+  device) must rate-limit. Defeats the research goal.
+- **WebAuthn `largeBlob` extension**: stores a key on the authenticator
+  directly. Less browser support than PRF in 2026; we prefer PRF for the
+  research target.
+- **Storing the unwrapped DEK in IndexedDB encrypted by a session
+  key**: pointless — the session key would have to live somewhere.
