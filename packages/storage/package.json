@@ -2,25 +2,32 @@
 	"name": "@opfs/storage",
 	"version": "0.1.0",
 	"private": true,
-	"description": "sqlite-wasm + OPFS writer worker with leader-election fallback. Typed RPC client.",
+	"description": "sqlite-wasm + OPFS dedicated-worker writer with leader-election fallback. Typed RPC client.",
 	"license": "MIT",
 	"type": "module",
 	"exports": {
 		".": {
 			"types": "./src/index.ts",
 			"import": "./src/index.ts"
+		},
+		"./worker": {
+			"types": "./src/db-worker.ts",
+			"import": "./src/db-worker.ts"
 		}
 	},
 	"files": [
 		"src"
 	],
 	"scripts": {
+		"test": "vitest run",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@opfs/core-wasm": "workspace:*"
+		"@opfs/core-wasm": "workspace:*",
+		"@sqlite.org/sqlite-wasm": "^3.50.0-build1"
 	},
 	"devDependencies": {
-		"typescript": "^5.8.2"
+		"typescript": "^5.8.2",
+		"vitest": "^2.1.0"
 	}
 }
