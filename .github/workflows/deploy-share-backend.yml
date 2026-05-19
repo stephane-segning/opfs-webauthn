@@ -25,6 +25,10 @@ on:
     paths:
       - "apps/share-backend/**"
       - ".github/workflows/deploy-share-backend.yml"
+      # Dependency-only commits (e.g. a wrangler patch) bump the
+      # lockfile without touching `apps/share-backend/**`; we still
+      # want those landing in production.
+      - "pnpm-lock.yaml"
   workflow_dispatch:
 
 permissions:
@@ -75,7 +79,12 @@ jobs:
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          # Read the account id from either the repository variable or
+          # the secret, depending on how the owner classified it. The
+          # README mentions both — this expression makes the workflow
+          # honor that flexibility instead of silently breaking when
+          # the id lives in `secrets`.
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/share-backend
           # `wrangler deploy` reads bindings from wrangler.jsonc and
           # publishes the Worker. ALLOWED_ORIGINS lives in vars there
