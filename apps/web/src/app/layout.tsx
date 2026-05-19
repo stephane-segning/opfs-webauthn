@@ -1,4 +1,4 @@
-import "@sse/styles/globals.css";
+import "../styles/globals.css";
 import "@opfs/design-tokens/tokens.css";
 
 import type { Metadata } from "next";

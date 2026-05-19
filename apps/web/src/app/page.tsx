@@ -1,9 +1,11 @@
+import { version } from "../../package.json";
+
 export default function Home() {
 	return (
 		<main className="auth-screen">
 			<section className="auth-card">
 				<header>
-					<p className="auth-tag">opfs-webauthn · v0.1</p>
+					<p className="auth-tag">opfs-webauthn · v{version}</p>
 					<h1>Your notes, locked to a passkey.</h1>
 					<p className="auth-blurb">
 						Everything stays on this device. The only way in is the passkey you

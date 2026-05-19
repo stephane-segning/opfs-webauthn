@@ -8,6 +8,7 @@ body {
 	color: var(--text-primary);
 	font-family: var(--font-ui);
 	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
 	min-height: 100dvh;
 }
 
