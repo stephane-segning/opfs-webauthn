@@ -1,0 +1,26 @@
+[package]
+name = "opfs-crypto"
+description = "AES-256-GCM row codec, HKDF-SHA-256 KEK derivation, and BLAKE3 commitment codes for opfs-webauthn."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+aes-gcm = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+blake3 = { workspace = true }
+rand_core = { workspace = true }
+zeroize = { workspace = true }
+subtle = { workspace = true }
+base32 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+hex-literal = { workspace = true }
+hex = { workspace = true }

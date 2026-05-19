@@ -1,0 +1,18 @@
+[package]
+name = "opfs-repo"
+description = "SQL schema, migrations, and encrypted row codec for the opfs-webauthn notes vault."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+opfs-crypto = { path = "../crypto" }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+ciborium = { workspace = true }
+thiserror = { workspace = true }

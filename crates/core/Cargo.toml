@@ -1,0 +1,19 @@
+[package]
+name = "opfs-core"
+description = "wasm-bindgen surface that re-exports the opfs-webauthn crates for JS consumers."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+opfs-crypto = { path = "../crypto" }
+opfs-repo = { path = "../repo" }
+opfs-share-protocol = { path = "../share-protocol" }
