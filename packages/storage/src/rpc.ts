@@ -93,22 +93,26 @@ type Pending = {
 
 /**
  * Minimum surface the page side needs from a worker transport.
- * Satisfied by both a dedicated `Worker` and a `SharedWorker.port`
- * (via the adapters in `index.ts`), so `WorkerClient` doesn't care
- * which transport it owns.
+ * Satisfied by both a dedicated `Worker` and a `SharedWorker` (via
+ * the adapters in `index.ts`), so `WorkerClient` doesn't care which
+ * transport it owns. The `"error"` channel is required so a worker
+ * load failure or crash rejects in-flight requests instead of
+ * stranding `bootstrap()` forever.
  */
-export type WorkerLike = {
+export interface WorkerLike {
 	postMessage(data: unknown): void;
 	addEventListener(
 		type: "message",
 		listener: (event: MessageEvent) => void,
 	): void;
+	addEventListener(type: "error", listener: (event: Event) => void): void;
 	removeEventListener(
 		type: "message",
 		listener: (event: MessageEvent) => void,
 	): void;
+	removeEventListener(type: "error", listener: (event: Event) => void): void;
 	close(): void;
-};
+}
 
 /**
  * Page-side handle for the storage worker. Construct once after the
@@ -123,6 +127,16 @@ export class WorkerClient {
 	constructor(worker: WorkerLike) {
 		this.#worker = worker;
 		this.#worker.addEventListener("message", this.#onMessage);
+		this.#worker.addEventListener("error", this.#onError);
+	}
+
+	#onError = (_event: Event): void => {
+		this.#rejectAll(new Error("storage worker error"));
+	};
+
+	#rejectAll(reason: Error): void {
+		for (const pending of this.#pending.values()) pending.reject(reason);
+		this.#pending.clear();
 	}
 
 	#onMessage = (event: MessageEvent<ServerEnvelope>): void => {
@@ -190,11 +204,22 @@ export class WorkerClient {
 	}
 
 	terminate(): void {
+		// Best-effort: tell the worker we're going so it drops our
+		// connection from its registry. We don't await the reply — the
+		// transport teardown below would discard it anyway. For a
+		// dedicated worker this is redundant (terminate kills it), but
+		// for a SharedWorker port it's the only signal the worker gets
+		// that this tab is leaving.
+		try {
+			const id = this.#nextId++;
+			this.#worker.postMessage({ id, request: { kind: "close" } });
+		} catch {
+			// transport may already be dead — nothing to do
+		}
 		this.#worker.removeEventListener("message", this.#onMessage);
+		this.#worker.removeEventListener("error", this.#onError);
 		this.#worker.close();
-		const err = new Error("storage worker terminated");
-		for (const pending of this.#pending.values()) pending.reject(err);
-		this.#pending.clear();
+		this.#rejectAll(new Error("storage worker terminated"));
 	}
 }
 

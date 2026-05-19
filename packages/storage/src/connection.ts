@@ -22,8 +22,13 @@ export type PortLike = {
 		type: "message",
 		listener: (event: MessageEvent) => void,
 	): void;
+	removeEventListener(
+		type: "message",
+		listener: (event: MessageEvent) => void,
+	): void;
 	postMessage(data: unknown): void;
 	start?(): void;
+	close?(): void;
 };
 
 export type Dispatch = (request: WorkerRequest) => Promise<WorkerResponse>;
@@ -47,10 +52,25 @@ export class Connection {
 		this.#port.postMessage(envelope);
 	}
 
+	/**
+	 * Detach this connection from its port and from the live-set so
+	 * `broadcastTxApplied` stops iterating it. Called when the client
+	 * sends `close`; SharedWorker has no port-disconnect event, so this
+	 * cooperative signal is the only deterministic cleanup path.
+	 */
+	dispose(): void {
+		this.#port.removeEventListener("message", this.#onMessage);
+		this.#port.close?.();
+		connections.delete(this);
+	}
+
 	#onMessage = (event: MessageEvent<ClientEnvelope>): void => {
 		const { id, request } = event.data;
 		this.#dispatch(request)
-			.then((response) => this.post(respond(id, response)))
+			.then((response) => {
+				this.post(respond(id, response));
+				if (request.kind === "close") this.dispose();
+			})
 			.catch((err: unknown) => {
 				const message = err instanceof Error ? err.message : String(err);
 				this.post(fail(id, message));

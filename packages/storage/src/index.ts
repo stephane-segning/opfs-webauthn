@@ -45,22 +45,31 @@ const supportsSharedWorker = (): boolean =>
 function adaptDedicated(worker: Worker): WorkerLike {
 	return {
 		postMessage: (data) => worker.postMessage(data),
-		addEventListener: (type, listener) =>
-			worker.addEventListener(type, listener),
-		removeEventListener: (type, listener) =>
-			worker.removeEventListener(type, listener),
+		addEventListener: worker.addEventListener.bind(worker),
+		removeEventListener: worker.removeEventListener.bind(worker),
 		close: () => worker.terminate(),
 	};
 }
 
 function adaptShared(shared: SharedWorker): WorkerLike {
 	shared.port.start();
+	// Messages flow over the port; error events fire on the SharedWorker
+	// object itself (e.g. script load failure), so each channel routes
+	// to the endpoint that actually emits it.
+	const route = (
+		method: "addEventListener" | "removeEventListener",
+		type: "message" | "error",
+		listener: EventListener,
+	): void => {
+		if (type === "error") shared[method]("error", listener);
+		else shared.port[method]("message", listener);
+	};
 	return {
 		postMessage: (data) => shared.port.postMessage(data),
 		addEventListener: (type, listener) =>
-			shared.port.addEventListener(type, listener),
+			route("addEventListener", type, listener as EventListener),
 		removeEventListener: (type, listener) =>
-			shared.port.removeEventListener(type, listener),
+			route("removeEventListener", type, listener as EventListener),
 		close: () => shared.port.close(),
 	};
 }
