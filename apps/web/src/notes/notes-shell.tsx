@@ -5,6 +5,7 @@ import type { Note, Repo } from "@opfs/storage";
 import { useTranslations } from "next-intl";
 import { useState } from "react";
 
+import type { SharedNote } from "../share/note-codec";
 import { ReceiveShareDialog } from "../share/receive-dialog";
 import { SendShareDialog } from "../share/send-dialog";
 import { getShareConfig } from "../share/share-config";
@@ -92,7 +93,7 @@ function LoadingBody() {
 type ShareDialog =
 	| { readonly kind: "none" }
 	| { readonly kind: "receive" }
-	| { readonly kind: "send"; readonly note: Note };
+	| { readonly kind: "send"; readonly payload: SharedNote };
 
 const NO_DIALOG: ShareDialog = { kind: "none" };
 
@@ -140,10 +141,10 @@ function NotesView({
 					onSave={saveDraft}
 					onShare={
 						shareConfig.enabled && selection.note
-							? () =>
+							? (draft) =>
 									setShare({
 										kind: "send",
-										note: selection.note as Note,
+										payload: { title: draft.title, body: draft.body },
 									})
 							: undefined
 					}
@@ -151,8 +152,8 @@ function NotesView({
 				{share.kind === "send" && shareConfig.enabled ? (
 					<SendShareDialog
 						client={shareConfig.client}
-						note={share.note}
 						onClose={() => setShare(NO_DIALOG)}
+						payload={share.payload}
 					/>
 				) : null}
 			</>

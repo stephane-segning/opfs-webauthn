@@ -59,14 +59,23 @@ export class RendezvousClient {
 		this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
 	}
 
-	/** `POST /rendezvous` — recipient mints a rendezvous. */
-	async mint(epk: Uint8Array): Promise<RendezvousMint> {
+	/**
+	 * `POST /rendezvous` — recipient mints a rendezvous. The optional
+	 * `signal` lets the caller abort the in-flight fetch (and free
+	 * the wasm `RecipientHandle` early) if the dialog is closed
+	 * before the backend responds.
+	 */
+	async mint(
+		epk: Uint8Array,
+		options: { readonly signal?: AbortSignal } = {},
+	): Promise<RendezvousMint> {
 		const response = await networkSafe(
 			() =>
 				this.#fetch(`${this.#baseUrl}/rendezvous`, {
 					method: "POST",
 					headers: { "content-type": APP_OCTET_STREAM },
 					body: asBody(epk),
+					signal: options.signal,
 				}),
 			"mint request failed",
 		);

@@ -25,11 +25,13 @@ export type NoteEditorProps = {
 	readonly onSave: (draft: Draft) => Promise<void>;
 	readonly onArchive?: (id: string) => Promise<void>;
 	/**
-	 * Optional share affordance — only passed when the share backend
-	 * is configured and the note is already saved (drafts can't be
-	 * shared until they have a stable id + persisted body).
+	 * Optional share affordance. Receives the *current* draft so the
+	 * recipient sees what's on screen, not the stale persisted note —
+	 * codex pointed out that capturing the parent's `selection.note`
+	 * would silently send pre-edit content if the user tapped Share
+	 * before tapping Save.
 	 */
-	readonly onShare?: () => void;
+	readonly onShare?: (draft: { title: string; body: string }) => void;
 };
 
 export function NoteEditor({
@@ -127,7 +129,7 @@ export function NoteEditor({
 					<button
 						className="auth-link"
 						disabled={busy}
-						onClick={onShare}
+						onClick={() => onShare({ title: draft.title, body: draft.body })}
 						type="button"
 					>
 						{t("editor.share")}

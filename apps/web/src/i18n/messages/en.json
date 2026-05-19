@@ -48,6 +48,7 @@
 			"title": "Notes",
 			"lock": "Lock",
 			"new": "New note",
+			"receive": "Receive a note",
 			"loading": "Opening your vault…"
 		},
 		"list": {

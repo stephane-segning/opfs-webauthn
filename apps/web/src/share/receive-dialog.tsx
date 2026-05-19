@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { formatCodeForDisplay } from "./format-code";
 import { decodeSharedNote } from "./note-codec";
+import { useModalDialog } from "./use-modal-dialog";
 
 /**
  * Each render of `ReceiveShareDialog` walks through this state
@@ -40,6 +41,7 @@ export function ReceiveShareDialog({
 	onReceived,
 }: ReceiveShareDialogProps) {
 	const t = useTranslations("share");
+	const dialogRef = useModalDialog(onClose);
 	const [state, setState] = useState<State>({ status: "minting" });
 	// Stash the latest props in refs so the mount-only effect can
 	// read them without re-running on every parent render. Re-running
@@ -59,7 +61,9 @@ export function ReceiveShareDialog({
 
 		void (async () => {
 			try {
-				const session = await prepareReceive(clientRef.current);
+				const session = await prepareReceive(clientRef.current, {
+					signal: controller.signal,
+				});
 				if (!active) {
 					session.handle.free();
 					return;
@@ -90,7 +94,7 @@ export function ReceiveShareDialog({
 	}, []);
 
 	return (
-		<dialog className="share-dialog" open>
+		<dialog className="share-dialog" ref={dialogRef}>
 			<header className="share-dialog-header">
 				<h2>{t("receive.title")}</h2>
 				<button className="auth-link" onClick={onClose} type="button">

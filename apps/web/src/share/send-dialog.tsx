@@ -5,11 +5,12 @@ import {
 	type RendezvousClient,
 	sendShare,
 } from "@opfs/share-client";
-import type { Note } from "@opfs/storage";
 import { useTranslations } from "next-intl";
 import { useRef, useState } from "react";
-import { encodeSharedNote } from "./note-codec";
+
+import { encodeSharedNote, type SharedNote } from "./note-codec";
 import { describeShareError } from "./receive-dialog";
+import { useModalDialog } from "./use-modal-dialog";
 
 type State =
 	| { readonly status: "idle" }
@@ -19,16 +20,22 @@ type State =
 
 export type SendShareDialogProps = {
 	readonly client: RendezvousClient;
-	readonly note: Note;
+	/**
+	 * Note payload to send — `{title, body}` only. The editor passes
+	 * its *current* draft (rather than the persisted note) so that
+	 * sharing reflects what's on screen, not a stale snapshot.
+	 */
+	readonly payload: SharedNote;
 	readonly onClose: () => void;
 };
 
 export function SendShareDialog({
 	client,
-	note,
+	payload,
 	onClose,
 }: SendShareDialogProps) {
 	const t = useTranslations("share");
+	const dialogRef = useModalDialog(onClose);
 	const [code, setCode] = useState("");
 	const [state, setState] = useState<State>({ status: "idle" });
 	// Submit guard — the same ref pattern used in the note editor,
@@ -44,8 +51,8 @@ export function SendShareDialog({
 		inflight.current = true;
 		setState({ status: "sending" });
 		try {
-			const payload = encodeSharedNote({ title: note.title, body: note.body });
-			await sendShare(client, normalized as string, payload);
+			const bytes = encodeSharedNote(payload);
+			await sendShare(client, normalized as string, bytes);
 			setState({ status: "sent" });
 		} catch (err) {
 			setState({ status: "error", message: describeShareError(err, t) });
@@ -55,7 +62,7 @@ export function SendShareDialog({
 	}
 
 	return (
-		<dialog className="share-dialog" open>
+		<dialog className="share-dialog" ref={dialogRef}>
 			<header className="share-dialog-header">
 				<h2>{t("send.title")}</h2>
 				<button className="auth-link" onClick={onClose} type="button">
