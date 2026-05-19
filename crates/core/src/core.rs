@@ -9,12 +9,18 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use opfs_crypto::{
-    Aead, AeadError, HkdfError, KEY_LEN, Key, KeyError, NONCE_LEN, TAG_LEN, derive_kek,
+    Aead, AeadError, HkdfError, KEY_LEN, Key, KeyError, NONCE_LEN, RecipientSecret, SealedShare,
+    ShareError, TAG_LEN, X25519_PUBKEY_LEN, X25519_SECRET_LEN, derive_kek, share_open,
+    share_seal_with_components,
 };
 use zeroize::Zeroizing;
 
 /// Context label for the KEK derivation, per ADR 0005.
 const KEK_INFO: &[u8] = b"opfs-webauthn/v1/kek";
+/// Domain separator bound into the share-flow HKDF expand label
+/// (and the AES-GCM AAD) so a future protocol revision invalidates
+/// old blobs by design. Bumping the suffix is a deliberate break.
+const SHARE_INFO: &[u8] = b"opfs-webauthn/v1/share";
 /// Associated data bound into the AES-GCM tag when wrapping the DEK.
 /// Anchors the wrap to the protocol version so a future major change
 /// invalidates old wrapped DEKs by design.
@@ -84,6 +90,129 @@ impl From<KeyError> for VaultError {
     fn from(e: KeyError) -> Self {
         Self::Key(e)
     }
+}
+
+/// Errors surfaced from the recipient-first share flow. Kept distinct
+/// from `VaultError` so the JS bindings can map them to dedicated
+/// `JsError`s without leaking the failure shape via stringly-typed
+/// catches.
+#[derive(Debug)]
+pub enum ShareVaultError {
+    BadRecipientPubkeyLength { got: usize },
+    BadSenderPubkeyLength { got: usize },
+    BadShareNonceLength { got: usize },
+    Random,
+    Share(ShareError),
+}
+
+impl DisplayError for ShareVaultError {
+    fn to_string(&self) -> String {
+        match self {
+            Self::BadRecipientPubkeyLength { got } => {
+                format!("recipientPubkey must be {X25519_PUBKEY_LEN} bytes, got {got}")
+            }
+            Self::BadSenderPubkeyLength { got } => {
+                format!("senderPubkey must be {X25519_PUBKEY_LEN} bytes, got {got}")
+            }
+            Self::BadShareNonceLength { got } => {
+                format!("nonce must be {NONCE_LEN} bytes, got {got}")
+            }
+            Self::Random => String::from("entropy source (crypto.getRandomValues / OS RNG) failed"),
+            Self::Share(e) => format!("share crypto failure: {e}"),
+        }
+    }
+}
+
+impl From<ShareError> for ShareVaultError {
+    fn from(e: ShareError) -> Self {
+        Self::Share(e)
+    }
+}
+
+fn pubkey_array(bytes: &[u8]) -> Option<[u8; X25519_PUBKEY_LEN]> {
+    bytes.try_into().ok()
+}
+
+fn nonce_array(bytes: &[u8]) -> Option<[u8; NONCE_LEN]> {
+    bytes.try_into().ok()
+}
+
+/// Recipient-side handle. Owns the X25519 secret for the lifetime of
+/// the share session and is the only thing that can open a `SealedShare`
+/// addressed to its public key.
+#[derive(Debug)]
+pub struct RecipientHandle {
+    secret: RecipientSecret,
+}
+
+impl RecipientHandle {
+    /// Mint a fresh recipient keypair. Returns `ShareVaultError::Random`
+    /// if the platform entropy source (`crypto.getRandomValues` on
+    /// the web, OS RNG on host) is unavailable — keeps the failure
+    /// recoverable in JS instead of panicking the wasm module.
+    pub fn prepare() -> Result<Self, ShareVaultError> {
+        let mut bytes = Zeroizing::new([0u8; X25519_SECRET_LEN]);
+        getrandom::getrandom(bytes.as_mut()).map_err(|_| ShareVaultError::Random)?;
+        Ok(Self {
+            secret: RecipientSecret::from_bytes(*bytes),
+        })
+    }
+
+    /// Public key to publish via the rendezvous backend.
+    pub fn pubkey(&self) -> [u8; X25519_PUBKEY_LEN] {
+        self.secret.pubkey()
+    }
+
+    /// Open a sealed share addressed to this recipient. Returns the
+    /// raw plaintext bytes; the buffer is zeroized on drop.
+    pub fn open(
+        &self,
+        sender_pubkey: &[u8],
+        nonce: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, ShareVaultError> {
+        let Some(sender_pk) = pubkey_array(sender_pubkey) else {
+            return Err(ShareVaultError::BadSenderPubkeyLength {
+                got: sender_pubkey.len(),
+            });
+        };
+        let Some(nonce) = nonce_array(nonce) else {
+            return Err(ShareVaultError::BadShareNonceLength { got: nonce.len() });
+        };
+        let plaintext = share_open(&self.secret, &sender_pk, &nonce, ciphertext, SHARE_INFO)?;
+        // `plaintext` is `Zeroizing<Vec<u8>>`; the clone we hand back
+        // is what JS sees, while the source buffer is wiped at the end
+        // of this scope. JS callers are responsible for clearing the
+        // returned bytes once the note has been written to OPFS.
+        Ok(plaintext.to_vec())
+    }
+}
+
+/// Sender-side seal. Encrypts `plaintext` under `recipient_pubkey`
+/// using a fresh ephemeral X25519 keypair. Returns
+/// `ShareVaultError::Random` if the entropy source is unavailable —
+/// matching `CryptoVault::enroll`'s contract so JS sees a recoverable
+/// error rather than a wasm panic.
+pub fn seal_share(
+    recipient_pubkey: &[u8],
+    plaintext: &[u8],
+) -> Result<SealedShare, ShareVaultError> {
+    let Some(pk) = pubkey_array(recipient_pubkey) else {
+        return Err(ShareVaultError::BadRecipientPubkeyLength {
+            got: recipient_pubkey.len(),
+        });
+    };
+    let mut sender_secret = Zeroizing::new([0u8; X25519_SECRET_LEN]);
+    getrandom::getrandom(sender_secret.as_mut()).map_err(|_| ShareVaultError::Random)?;
+    let mut nonce = [0u8; NONCE_LEN];
+    getrandom::getrandom(&mut nonce).map_err(|_| ShareVaultError::Random)?;
+    Ok(share_seal_with_components(
+        &pk,
+        plaintext,
+        SHARE_INFO,
+        &sender_secret,
+        &nonce,
+    )?)
 }
 
 /// Pure Rust vault. The wasm-bindgen wrapper in `lib.rs` holds one of
@@ -360,6 +489,55 @@ mod tests {
                 ),
                 "unlock must reject {bogus_len}-byte PRF output",
             );
+        }
+    }
+
+    #[test]
+    fn share_seal_open_roundtrip_recovers_plaintext() {
+        let recipient = RecipientHandle::prepare().unwrap();
+        let recipient_pk = recipient.pubkey();
+        let sealed = seal_share(&recipient_pk, b"hello share").expect("seal");
+        let opened = recipient
+            .open(&sealed.sender_pubkey, &sealed.nonce, &sealed.ciphertext)
+            .expect("open");
+        assert_eq!(opened, b"hello share");
+    }
+
+    #[test]
+    fn share_open_rejects_wrong_recipient() {
+        let alice = RecipientHandle::prepare().unwrap();
+        let mallory = RecipientHandle::prepare().unwrap();
+        let sealed = seal_share(&alice.pubkey(), b"to alice").unwrap();
+        let err = mallory
+            .open(&sealed.sender_pubkey, &sealed.nonce, &sealed.ciphertext)
+            .unwrap_err();
+        assert!(matches!(err, ShareVaultError::Share(_)));
+    }
+
+    #[test]
+    fn share_open_rejects_bad_input_lengths() {
+        let recipient = RecipientHandle::prepare().unwrap();
+        let sealed = seal_share(&recipient.pubkey(), b"x").unwrap();
+        // Wrong sender pubkey length.
+        assert!(matches!(
+            recipient.open(&[0u8; 31], &sealed.nonce, &sealed.ciphertext),
+            Err(ShareVaultError::BadSenderPubkeyLength { got: 31 })
+        ));
+        // Wrong nonce length.
+        assert!(matches!(
+            recipient.open(&sealed.sender_pubkey, &[0u8; 8], &sealed.ciphertext),
+            Err(ShareVaultError::BadShareNonceLength { got: 8 })
+        ));
+    }
+
+    #[test]
+    fn seal_share_rejects_bad_recipient_pubkey_length() {
+        for bogus_len in [0usize, 16, 31, 33, 64] {
+            let bogus = vec![0u8; bogus_len];
+            assert!(matches!(
+                seal_share(&bogus, b"plain"),
+                Err(ShareVaultError::BadRecipientPubkeyLength { .. })
+            ));
         }
     }
 

@@ -252,3 +252,98 @@ impl EnrollResult {
 fn into_js_error<E: core::DisplayError>(e: E) -> JsError {
     JsError::new(&e.to_string())
 }
+
+// ---------------------------------------------------------------
+// Share flow (ADR 0007). Recipient mints a `RecipientHandle` and
+// publishes `.pubkey`; sender calls `sealShare(recipient_pk, blob)`;
+// recipient calls `handle.openShare(sender_pk, nonce, ciphertext)`.
+// ---------------------------------------------------------------
+
+/// Recipient-side keypair handle. Holds the X25519 secret in wasm
+/// memory; JS only ever sees the matching public key and the opaque
+/// handle. Dropping it from JS frees the secret bytes.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct RecipientHandle(core::RecipientHandle);
+
+#[wasm_bindgen]
+impl RecipientHandle {
+    /// Mint a fresh recipient keypair. The matching public key is
+    /// the value to publish via `POST /rendezvous`. Throws if the
+    /// platform entropy source is unavailable — JS sees a recoverable
+    /// error rather than a wasm panic.
+    #[wasm_bindgen(js_name = prepare)]
+    pub fn prepare() -> Result<Self, JsError> {
+        core::RecipientHandle::prepare()
+            .map(Self)
+            .map_err(into_js_error)
+    }
+
+    /// The X25519 public key as raw 32 bytes — what the rendezvous
+    /// backend stores and the sender fetches.
+    #[wasm_bindgen(getter, js_name = pubkey)]
+    #[must_use]
+    pub fn pubkey(&self) -> Vec<u8> {
+        self.0.pubkey().to_vec()
+    }
+
+    /// Decrypt a sealed share addressed to this recipient. Throws if
+    /// the inputs are malformed or the tag does not verify (the
+    /// most likely cause is a substituted sender pubkey or a
+    /// recipient/sender mix-up).
+    #[wasm_bindgen(js_name = openShare)]
+    pub fn open_share(
+        &self,
+        sender_pubkey: &[u8],
+        nonce: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, JsError> {
+        self.0
+            .open(sender_pubkey, nonce, ciphertext)
+            .map_err(into_js_error)
+    }
+}
+
+/// JS-visible result of `sealShare`. Opaque to keep the struct
+/// shape stable across protocol revisions; readers go through the
+/// typed getters.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct SealedShare(opfs_crypto::SealedShare);
+
+#[wasm_bindgen]
+impl SealedShare {
+    /// Sender's ephemeral X25519 public key. Goes into the
+    /// `ShareBlob` envelope verbatim.
+    #[wasm_bindgen(getter, js_name = senderPubkey)]
+    #[must_use]
+    pub fn sender_pubkey(&self) -> Vec<u8> {
+        self.0.sender_pubkey.to_vec()
+    }
+
+    /// AES-GCM nonce.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn nonce(&self) -> Vec<u8> {
+        self.0.nonce.to_vec()
+    }
+
+    /// AES-256-GCM ciphertext (including the 16-byte tag suffix).
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn ciphertext(&self) -> Vec<u8> {
+        self.0.ciphertext.clone()
+    }
+}
+
+/// Seal `plaintext` for the recipient identified by `recipientPubkey`.
+///
+/// The sender's ephemeral X25519 secret is generated inside wasm and
+/// dropped (zeroized) before this function returns; JS only ever sees
+/// the public-key + ciphertext output.
+#[wasm_bindgen(js_name = sealShare)]
+pub fn seal_share(recipient_pubkey: &[u8], plaintext: &[u8]) -> Result<SealedShare, JsError> {
+    core::seal_share(recipient_pubkey, plaintext)
+        .map(SealedShare)
+        .map_err(into_js_error)
+}
