@@ -30,10 +30,15 @@ impl Key {
     }
 
     /// Generate a new random key using the supplied RNG.
+    ///
+    /// The intermediate buffer is `Zeroizing`, so the stack copy of the
+    /// random bytes is wiped after the key is constructed. The only
+    /// remaining copy lives inside the returned `Key`, which is itself
+    /// `ZeroizeOnDrop`.
     pub fn random(rng: &mut impl rand_core::RngCore) -> Self {
-        let mut bytes = [0u8; KEY_LEN];
-        rng.fill_bytes(&mut bytes);
-        Self(bytes)
+        let mut bytes = Zeroizing::new([0u8; KEY_LEN]);
+        rng.fill_bytes(bytes.as_mut());
+        Self(*bytes)
     }
 
     /// Borrow the raw bytes. Prefer `expose()` to make intent explicit.

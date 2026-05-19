@@ -5,10 +5,13 @@
 //! the JS bridge has exactly one place to evolve.
 //!
 //! The `wasm-bindgen` glue lands in a follow-up PR; for now this is a
-//! plain `rlib` re-export so the workspace builds end-to-end and the
+//! plain re-export shell so the workspace builds end-to-end and the
 //! dependency graph is wired.
-
-#![no_std]
+//!
+//! This crate depends on `std` because it is built as a `cdylib` and
+//! needs a global allocator + panic handler. The leaf crates
+//! (`opfs-crypto`, `opfs-share-protocol`) are `no_std + alloc` so they
+//! remain reusable in embedded contexts.
 
 pub use opfs_crypto;
 pub use opfs_repo;
