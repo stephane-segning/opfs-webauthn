@@ -1,43 +1,26 @@
 {
-	"name": "ssegning-opfs-webauthn",
+	"name": "opfs-webauthn",
 	"version": "0.1.0",
 	"private": true,
+	"description": "Local-first PWA notes app — WebAuthn PRF + OPFS-backed SQLite + Rust/WASM crypto.",
+	"license": "MIT",
 	"type": "module",
 	"scripts": {
-		"build": "next build",
+		"build": "turbo run build",
 		"check": "biome check .",
-		"check:unsafe": "biome check --write --unsafe .",
 		"check:write": "biome check --write .",
-		"dev": "next dev --turbo",
-		"preview": "next build && next start",
-		"start": "next start",
-		"typecheck": "tsc --noEmit"
-	},
-	"dependencies": {
-		"@t3-oss/env-nextjs": "^0.12.0",
-		"@tanstack/react-query": "^5.69.0",
-		"@trpc/client": "^11.0.0",
-		"@trpc/react-query": "^11.0.0",
-		"@trpc/server": "^11.0.0",
-		"next": "^15.2.3",
-		"react": "^19.0.0",
-		"react-dom": "^19.0.0",
-		"server-only": "^0.0.1",
-		"superjson": "^2.2.1",
-		"zod": "^3.24.2"
+		"dev": "turbo run dev",
+		"lint": "biome check .",
+		"test": "turbo run test",
+		"typecheck": "turbo run typecheck"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.2.5",
-		"@tailwindcss/postcss": "^4.0.15",
-		"@types/node": "^20.14.10",
-		"@types/react": "^19.0.0",
-		"@types/react-dom": "^19.0.0",
-		"postcss": "^8.5.3",
-		"tailwindcss": "^4.0.15",
+		"turbo": "^2.5.0",
 		"typescript": "^5.8.2"
 	},
-	"ct3aMetadata": {
-		"initVersion": "7.40.0"
-	},
-	"packageManager": "pnpm@10.33.0"
+	"packageManager": "pnpm@10.33.0",
+	"engines": {
+		"node": ">=20"
+	}
 }
