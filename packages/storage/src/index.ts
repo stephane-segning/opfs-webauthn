@@ -15,16 +15,17 @@ export type Note = {
 	readonly archived: boolean;
 };
 
+/** Input to `Repo.upsertNote`. `id` is optional — omit to create a new note. */
+export type NoteInput = Omit<Note, "id" | "createdAt" | "updatedAt"> & {
+	readonly id?: string;
+};
+
 export type Repo = {
 	readonly listNotes: (input: { limit?: number; cursor?: string }) => Promise<{
 		readonly notes: readonly Note[];
 		readonly nextCursor: string | null;
 	}>;
-	readonly upsertNote: (
-		note: Omit<Note, "createdAt" | "updatedAt"> & {
-			readonly id?: string;
-		},
-	) => Promise<Note>;
+	readonly upsertNote: (note: NoteInput) => Promise<Note>;
 	readonly archiveNote: (id: string) => Promise<void>;
 	readonly close: () => Promise<void>;
 };

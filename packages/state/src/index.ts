@@ -11,7 +11,7 @@
  * so dependent packages can type-check.
  */
 
-import type { Note } from "@opfs/storage";
+import type { Note, NoteInput } from "@opfs/storage";
 
 export type VaultState =
 	| { readonly status: "unsupported" }
@@ -24,7 +24,7 @@ export type NotesSlice = {
 	readonly notes: readonly Note[];
 	readonly loaded: boolean;
 	readonly load: () => Promise<void>;
-	readonly upsert: (note: Pick<Note, "id" | "title" | "body">) => Promise<void>;
+	readonly upsert: (note: NoteInput) => Promise<void>;
 	readonly archive: (id: string) => Promise<void>;
 	readonly applyTxApplied: (ids: readonly string[]) => void;
 };

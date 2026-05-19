@@ -55,6 +55,7 @@ export const tokens = {
 		contrast: "var(--accent-contrast)",
 		soft: "var(--accent-soft)",
 	},
+	focusRing: "var(--focus-ring)",
 } as const;
 
 export type ThemeName = "light" | "dark" | "system";
