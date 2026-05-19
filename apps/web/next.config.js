@@ -30,6 +30,7 @@ const config = {
 		"@opfs/auth",
 		"@opfs/core-wasm",
 		"@opfs/design-tokens",
+		"@opfs/share-client",
 		"@opfs/storage",
 	],
 	webpack(webpackConfig) {

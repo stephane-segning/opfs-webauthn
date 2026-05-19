@@ -5,6 +5,11 @@ import type { Note, Repo } from "@opfs/storage";
 import { useTranslations } from "next-intl";
 import { useState } from "react";
 
+import type { SharedNote } from "../share/note-codec";
+import { ReceiveShareDialog } from "../share/receive-dialog";
+import { SendShareDialog } from "../share/send-dialog";
+import { getShareConfig } from "../share/share-config";
+
 import { NoteEditor } from "./note-editor";
 import { NotesList } from "./notes-list";
 import { useNotes } from "./use-notes";
@@ -84,6 +89,14 @@ function LoadingBody() {
 	);
 }
 
+/** Dialog overlay state, peer to `Selection`. */
+type ShareDialog =
+	| { readonly kind: "none" }
+	| { readonly kind: "receive" }
+	| { readonly kind: "send"; readonly payload: SharedNote };
+
+const NO_DIALOG: ShareDialog = { kind: "none" };
+
 function NotesView({
 	repo,
 	t,
@@ -94,6 +107,8 @@ function NotesView({
 }) {
 	const { state } = useNotes(repo);
 	const [selection, setSelection] = useState<Selection>(NO_SELECTION);
+	const [share, setShare] = useState<ShareDialog>(NO_DIALOG);
+	const shareConfig = getShareConfig();
 
 	async function saveDraft(draft: {
 		id?: string;
@@ -109,14 +124,39 @@ function NotesView({
 		setSelection(NO_SELECTION);
 	}
 
+	function onReceived(note: Note) {
+		// Surfacing the received note as the next edit target lets the
+		// recipient verify what landed before going back to the list.
+		setShare(NO_DIALOG);
+		setSelection({ kind: "draft", note });
+	}
+
 	if (selection.kind === "draft") {
 		return (
-			<NoteEditor
-				note={selection.note}
-				onArchive={selection.note ? archive : undefined}
-				onCancel={() => setSelection(NO_SELECTION)}
-				onSave={saveDraft}
-			/>
+			<>
+				<NoteEditor
+					note={selection.note}
+					onArchive={selection.note ? archive : undefined}
+					onCancel={() => setSelection(NO_SELECTION)}
+					onSave={saveDraft}
+					onShare={
+						shareConfig.enabled && selection.note
+							? (draft) =>
+									setShare({
+										kind: "send",
+										payload: { title: draft.title, body: draft.body },
+									})
+							: undefined
+					}
+				/>
+				{share.kind === "send" && shareConfig.enabled ? (
+					<SendShareDialog
+						client={shareConfig.client}
+						onClose={() => setShare(NO_DIALOG)}
+						payload={share.payload}
+					/>
+				) : null}
+			</>
 		);
 	}
 
@@ -131,6 +171,15 @@ function NotesView({
 				>
 					{t("shell.new")}
 				</button>
+				{shareConfig.enabled ? (
+					<button
+						className="auth-link notes-toolbar-receive"
+						onClick={() => setShare({ kind: "receive" })}
+						type="button"
+					>
+						{t("shell.receive")}
+					</button>
+				) : null}
 			</div>
 			{state.status === "loading" ? (
 				<LoadingBody />
@@ -144,6 +193,14 @@ function NotesView({
 					onOpen={(note) => setSelection({ kind: "draft", note })}
 				/>
 			)}
+			{share.kind === "receive" && shareConfig.enabled ? (
+				<ReceiveShareDialog
+					client={shareConfig.client}
+					onClose={() => setShare(NO_DIALOG)}
+					onReceived={onReceived}
+					repo={repo}
+				/>
+			) : null}
 		</>
 	);
 }

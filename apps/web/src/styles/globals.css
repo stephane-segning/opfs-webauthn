@@ -199,6 +199,12 @@ body {
 .notes-toolbar {
 	display: flex;
 	justify-content: flex-end;
+	gap: var(--space-3);
+	align-items: center;
+}
+
+.notes-toolbar-receive {
+	margin-right: auto;
 }
 
 .notes-list {
@@ -339,4 +345,90 @@ body {
 .note-editor-archive {
 	align-self: flex-start;
 	color: var(--text-muted);
+}
+
+.note-editor-foot {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--space-3);
+	margin-top: var(--space-2);
+}
+
+/* Share dialogs ----------------------------------------------------- */
+.share-dialog {
+	position: fixed;
+	inset: 0;
+	margin: auto;
+	max-width: min(420px, calc(100% - var(--space-6)));
+	width: 100%;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--text);
+	border-radius: var(--radius-lg);
+	padding: var(--space-5);
+	box-shadow: var(--shadow-lg, 0 30px 60px rgba(0, 0, 0, 0.4));
+	z-index: 50;
+}
+
+.share-dialog::backdrop {
+	background: rgba(0, 0, 0, 0.55);
+}
+
+.share-dialog-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: var(--space-4);
+}
+
+.share-dialog-header h2 {
+	margin: 0;
+	font-size: var(--font-size-lg);
+	font-weight: 600;
+}
+
+.share-dialog-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-3);
+}
+
+.share-blurb {
+	color: var(--text-muted);
+	margin: 0;
+}
+
+.share-foot {
+	color: var(--text-muted);
+	font-size: var(--font-size-sm);
+	margin: 0;
+}
+
+.share-code {
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: var(--font-size-xl, 1.5rem);
+	letter-spacing: 0.12em;
+	text-align: center;
+	margin: 0;
+	padding: var(--space-3);
+	background: var(--surface-elevated, rgba(255, 255, 255, 0.04));
+	border-radius: var(--radius-md);
+	user-select: all;
+}
+
+.share-code-input {
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: var(--font-size-lg);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	text-align: center;
+	padding: var(--space-3);
+	border-radius: var(--radius-md);
+	border: 1px solid var(--border);
+	background: var(--surface-elevated, rgba(255, 255, 255, 0.04));
+	color: var(--text);
+}
+
+.share-send-cta {
+	align-self: flex-end;
 }

@@ -24,6 +24,14 @@ export type NoteEditorProps = {
 	readonly onCancel: () => void;
 	readonly onSave: (draft: Draft) => Promise<void>;
 	readonly onArchive?: (id: string) => Promise<void>;
+	/**
+	 * Optional share affordance. Receives the *current* draft so the
+	 * recipient sees what's on screen, not the stale persisted note —
+	 * codex pointed out that capturing the parent's `selection.note`
+	 * would silently send pre-edit content if the user tapped Share
+	 * before tapping Save.
+	 */
+	readonly onShare?: (draft: { title: string; body: string }) => void;
 };
 
 export function NoteEditor({
@@ -31,6 +39,7 @@ export function NoteEditor({
 	onCancel,
 	onSave,
 	onArchive,
+	onShare,
 }: NoteEditorProps) {
 	const t = useTranslations("notes");
 	const [draft, setDraft] = useState<Draft>(fromNote(note));
@@ -115,16 +124,28 @@ export function NoteEditor({
 				placeholder={t("editor.bodyPlaceholder")}
 				value={draft.body}
 			/>
-			{note && onArchive ? (
-				<button
-					className="auth-link note-editor-archive"
-					disabled={busy}
-					onClick={handleArchive}
-					type="button"
-				>
-					{t("editor.archive")}
-				</button>
-			) : null}
+			<div className="note-editor-foot">
+				{note && onShare ? (
+					<button
+						className="auth-link"
+						disabled={busy}
+						onClick={() => onShare({ title: draft.title, body: draft.body })}
+						type="button"
+					>
+						{t("editor.share")}
+					</button>
+				) : null}
+				{note && onArchive ? (
+					<button
+						className="auth-link note-editor-archive"
+						disabled={busy}
+						onClick={handleArchive}
+						type="button"
+					>
+						{t("editor.archive")}
+					</button>
+				) : null}
+			</div>
 		</section>
 	);
 }

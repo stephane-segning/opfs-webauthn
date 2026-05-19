@@ -58,17 +58,25 @@ const DEFAULT_POLL_TIMEOUT_MS = 300_000;
  * Recipient: mint a rendezvous. The returned `handle` must be kept
  * alive until `pollAndDecrypt` (or its WASM resources freed via
  * `handle.free()` if the user cancels).
+ *
+ * `options.signal` aborts the underlying fetch; the handle is freed
+ * synchronously on the rejection path so the caller cannot leak a
+ * wasm allocation by closing the dialog mid-flight.
  */
 export async function prepareReceive(
 	client: RendezvousClient,
+	options: { readonly signal?: AbortSignal } = {},
 ): Promise<RecipientSession> {
 	await ensureWasmReady();
 	const handle = RecipientHandle.prepare();
 	try {
-		const { code, expiresAt } = await client.mint(handle.pubkey);
+		const { code, expiresAt } = await client.mint(handle.pubkey, {
+			signal: options.signal,
+		});
 		return { code, expiresAt, handle };
 	} catch (err) {
-		// Don't leak the wasm allocation if the network call fails.
+		// Don't leak the wasm allocation if the network call fails or
+		// the caller aborts before the backend responds.
 		handle.free();
 		throw err;
 	}
