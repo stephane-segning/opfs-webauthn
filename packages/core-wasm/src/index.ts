@@ -1,18 +1,26 @@
 /**
- * `@opfs/core-wasm` — generated wasm-bindgen wrapper for the `opfs-core`
- * Rust crate. The actual wasm artifact lands in a follow-up PR via
- * `wasm-pack build crates/core --target web --out-dir packages/core-wasm/dist`.
+ * `@opfs/core-wasm` — typed re-export over the wasm-bindgen output in
+ * `./dist`. Run `pnpm --filter @opfs/core-wasm build` (or rely on
+ * Turbo) to generate that dist before importing this package.
  *
- * Until then this stub exports the public surface shape so dependent
- * JS packages can type-check their imports.
+ * Use:
+ * ```ts
+ * import init, { codeForPubkey, verifyCode } from "@opfs/core-wasm";
+ * await init();
+ * const code = codeForPubkey(epk);
+ * ```
  */
 
-export const PROTOCOL_VERSION = 1 as const;
-export const X25519_PUBKEY_LEN = 32 as const;
-export const AES_GCM_NONCE_LEN = 12 as const;
-export const COMMITMENT_CODE_LEN = 12 as const;
+// biome-ignore lint/performance/noBarrelFile: this is the package's public surface
+export {
+	codeForPubkey,
+	commitmentCodeLen,
+	default,
+	default as init,
+	initSync,
+	protocolVersion,
+	verifyCode,
+	x25519PubkeyLen,
+} from "../dist/opfs_core.js";
 
-/** Placeholder until wasm-pack runs. */
-export type WasmModule = {
-	readonly ready: Promise<void>;
-};
+export type { InitInput, InitOutput, SyncInitInput } from "../dist/opfs_core.js";
