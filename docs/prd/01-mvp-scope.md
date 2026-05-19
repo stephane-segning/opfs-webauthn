@@ -42,9 +42,15 @@ The MVP is what we commit to shipping to GitHub Pages as the first
 - Sharing is a **recipient-first rendezvous**, not a sender-initiated
   push to a directory of users.
 - On the recipient device, the user taps "Receive on this device". The
-  recipient generates a fresh ephemeral X25519 keypair, authenticates
-  the request with its own passkey, and the backend returns a short
-  12-character pickup code (5-minute TTL).
+  recipient generates a fresh ephemeral X25519 keypair and posts the
+  public half to the backend, which returns a short 12-character
+  pickup code derived from a BLAKE3 truncation of the pubkey
+  (5-minute TTL). The request is not authenticated server-side — see
+  ADR 0007 for why a WebAuthn assertion would not be verifiable
+  without a credential registry, and how the commitment-style code
+  defeats backend tampering instead. The user does still tap their
+  passkey locally before sharing, but only to unlock their own vault
+  to read the note being sent.
 - The user reads the code out loud or types it on the sender device.
 - The sender device fetches the recipient's ephemeral public key by
   code, derives a shared secret, encrypts the note's plaintext with
