@@ -58,20 +58,30 @@ pub fn commitment_code_len() -> u32 {
 /// Derive the rendezvous pickup code for a recipient's ephemeral X25519
 /// public key. Returns 12 Crockford-base32 characters (60 bits of
 /// entropy bound to the key) — see ADR 0007.
+///
+/// Returns an empty string if `epk` is not exactly 32 bytes: the
+/// protocol commits to an X25519 public key and arbitrary-length
+/// inputs would silently produce mismatching codes downstream.
 #[wasm_bindgen(js_name = codeForPubkey)]
 #[must_use]
 pub fn code_for_pubkey(epk: &[u8]) -> String {
+    if epk.len() != opfs_share_protocol::X25519_PUBKEY_LEN {
+        return String::new();
+    }
     commitment::code_for_pubkey(epk)
 }
 
 /// Verify a pickup code matches a fetched ephemeral pubkey.
 ///
-/// Returns `true` on match, `false` on mismatch or wrong code length —
-/// callers can branch without try/catch. The implementation is
-/// constant-time inside the matched-length case.
+/// Returns `true` on match, `false` on mismatch or wrong code / key
+/// length — callers can branch without try/catch. The implementation
+/// is constant-time inside the matched-length case.
 #[wasm_bindgen(js_name = verifyCode)]
 #[must_use]
 pub fn verify_code(code: &str, epk: &[u8]) -> bool {
+    if epk.len() != opfs_share_protocol::X25519_PUBKEY_LEN {
+        return false;
+    }
     commitment::verify_code(code, epk).is_ok()
 }
 
@@ -98,5 +108,16 @@ mod tests {
         assert_eq!(code.len(), commitment_code_len() as usize);
         assert!(verify_code(&code, &epk));
         assert!(!verify_code(&code, &[8u8; 32]));
+    }
+
+    #[test]
+    fn rejects_non_x25519_pubkey_length() {
+        // code_for_pubkey returns empty on wrong-length input.
+        assert!(code_for_pubkey(&[0u8; 16]).is_empty());
+        assert!(code_for_pubkey(&[0u8; 64]).is_empty());
+        // verify_code rejects wrong-length pubkeys.
+        let code = code_for_pubkey(&[1u8; 32]);
+        assert!(!verify_code(&code, &[1u8; 16]));
+        assert!(!verify_code(&code, &[1u8; 64]));
     }
 }

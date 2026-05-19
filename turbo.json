@@ -20,6 +20,10 @@
 			],
 			"outputs": ["dist/**"]
 		},
+		"@opfs/core-wasm#typecheck": {
+			"dependsOn": ["@opfs/core-wasm#build"],
+			"outputs": []
+		},
 		"dev": {
 			"cache": false,
 			"persistent": true
