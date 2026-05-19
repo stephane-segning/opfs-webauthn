@@ -26,3 +26,10 @@ opfs-crypto = { path = "../crypto" }
 opfs-repo = { path = "../repo" }
 opfs-share-protocol = { path = "../share-protocol" }
 wasm-bindgen = "0.2"
+zeroize = { workspace = true }
+# `getrandom`'s default backend handles host targets. On
+# wasm32-unknown-unknown the "js" feature wires it up to Web Crypto's
+# `crypto.getRandomValues`, which is what we want — the DEK and wrap
+# nonce are generated inside wasm so they never appear as JS-visible
+# byte buffers (ADR 0005).
+getrandom = { version = "0.2", features = ["js"] }

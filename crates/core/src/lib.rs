@@ -4,6 +4,10 @@
 //! exposes a small, audited surface over the underlying crates so the
 //! JS bridge has exactly one place to evolve.
 //!
+//! All actual logic lives in the private `core` module so it can be
+//! unit-tested with `cargo test` (the `#[wasm_bindgen]` wrappers
+//! cannot be invoked outside a wasm runtime).
+//!
 //! Built into a JS + .wasm bundle via:
 //!
 //! ```sh
@@ -13,12 +17,62 @@
 //!   --out-name opfs_core
 //! ```
 
-use opfs_crypto::commitment;
+extern crate alloc;
+
+// `pub` items inside `mod core` are reachable from the rest of the
+// crate but not from outside. `pub(crate)` would lint as
+// `redundant_pub_crate` (the mod is already private); `pub` lints as
+// `unreachable_pub` from outside the crate. We pick `pub` + allow the
+// outside-the-crate unreachability, since the items are very much
+// reachable inside the crate, which is what matters for testing.
+#[allow(unreachable_pub)]
+mod core;
+
+use alloc::vec::Vec;
+use opfs_crypto::{KEY_LEN, NONCE_LEN, TAG_LEN, commitment};
 use wasm_bindgen::prelude::*;
 
 pub use opfs_crypto;
 pub use opfs_repo;
 pub use opfs_share_protocol;
+
+/// Length in bytes of the data-encryption key (DEK). Always 32.
+#[wasm_bindgen(js_name = dekLen)]
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::missing_const_for_fn,
+    reason = "compile-time constant is 32; wasm-bindgen rejects const fn"
+)]
+pub fn dek_len() -> u32 {
+    KEY_LEN as u32
+}
+
+/// Length in bytes of the AES-GCM nonce that wraps the DEK (and is also
+/// the per-row nonce length). Always 12.
+#[wasm_bindgen(js_name = aesGcmNonceLen)]
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::missing_const_for_fn,
+    reason = "compile-time constant is 12; wasm-bindgen rejects const fn"
+)]
+pub fn aes_gcm_nonce_len() -> u32 {
+    NONCE_LEN as u32
+}
+
+/// Length in bytes of the AES-GCM authentication tag (suffix on every
+/// ciphertext we produce). Always 16.
+#[wasm_bindgen(js_name = aesGcmTagLen)]
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::missing_const_for_fn,
+    reason = "compile-time constant is 16; wasm-bindgen rejects const fn"
+)]
+pub fn aes_gcm_tag_len() -> u32 {
+    TAG_LEN as u32
+}
 
 /// Protocol version (mirrors `opfs_share_protocol::PROTOCOL_VERSION`).
 #[wasm_bindgen(js_name = protocolVersion)]
@@ -88,39 +142,113 @@ pub fn verify_code(code: &str, epk: &[u8]) -> bool {
     commitment::verify_code(code, epk).is_ok()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// The opened vault. Holds the in-memory DEK; never exposes it to JS.
+/// Drop semantics zeroize the DEK.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct CryptoVault(core::CryptoVault);
 
-    #[test]
-    fn re_exports_are_reachable() {
-        let _ = crate::opfs_crypto::KEY_LEN;
-        let _ = crate::opfs_repo::SCHEMA_VERSION;
-        let _ = crate::opfs_share_protocol::PROTOCOL_VERSION;
+#[wasm_bindgen]
+impl CryptoVault {
+    /// Enroll: generate a fresh random DEK inside wasm, wrap it with a
+    /// KEK derived from the `WebAuthn` PRF output, and return both the
+    /// wrapped DEK (to persist) and an unlocked vault ready to
+    /// encrypt rows.
+    ///
+    /// The DEK and wrap nonce are generated via `getrandom` (which
+    /// the "js" feature wires to `crypto.getRandomValues` in the
+    /// browser), so the raw key bytes never appear in JS — see
+    /// ADR 0005.
+    ///
+    /// `prfOutput` is the PRF result from the `WebAuthn` ceremony.
+    /// `prfSalt` is the per-vault salt persisted alongside the
+    /// credential id.
+    #[wasm_bindgen(js_name = enroll)]
+    pub fn enroll(prf_output: &[u8], prf_salt: &[u8]) -> Result<EnrollResult, JsError> {
+        core::CryptoVault::enroll(prf_output, prf_salt)
+            .map(EnrollResult::from)
+            .map_err(into_js_error)
     }
 
-    #[test]
-    fn protocol_version_matches_share_protocol() {
-        assert_eq!(protocol_version(), opfs_share_protocol::PROTOCOL_VERSION);
+    /// Unlock: derive the KEK from `prfOutput` and unwrap the
+    /// persisted DEK to instantiate a vault. Throws on authentication
+    /// failure (wrong PRF output, tampered ciphertext).
+    #[wasm_bindgen(js_name = unlock)]
+    pub fn unlock(
+        prf_output: &[u8],
+        prf_salt: &[u8],
+        wrapped_dek: &[u8],
+        wrap_nonce: &[u8],
+    ) -> Result<Self, JsError> {
+        core::CryptoVault::unlock(prf_output, prf_salt, wrapped_dek, wrap_nonce)
+            .map(Self)
+            .map_err(into_js_error)
     }
 
-    #[test]
-    fn commitment_roundtrip() {
-        let epk = [7u8; 32];
-        let code = code_for_pubkey(&epk);
-        assert_eq!(code.len(), commitment_code_len() as usize);
-        assert!(verify_code(&code, &epk));
-        assert!(!verify_code(&code, &[8u8; 32]));
+    /// Encrypt `plaintext` under the vault DEK with the caller-supplied
+    /// fresh nonce. The 16-byte GCM tag is appended to the returned
+    /// ciphertext.
+    #[wasm_bindgen]
+    pub fn encrypt(&self, nonce: &[u8], aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, JsError> {
+        self.0.encrypt(nonce, aad, plaintext).map_err(into_js_error)
     }
 
-    #[test]
-    fn rejects_non_x25519_pubkey_length() {
-        // code_for_pubkey returns empty on wrong-length input.
-        assert!(code_for_pubkey(&[0u8; 16]).is_empty());
-        assert!(code_for_pubkey(&[0u8; 64]).is_empty());
-        // verify_code rejects wrong-length pubkeys.
-        let code = code_for_pubkey(&[1u8; 32]);
-        assert!(!verify_code(&code, &[1u8; 16]));
-        assert!(!verify_code(&code, &[1u8; 64]));
+    /// Decrypt `ciphertext` (which must include the trailing 16-byte
+    /// GCM tag) under the vault DEK.
+    #[wasm_bindgen]
+    pub fn decrypt(&self, nonce: &[u8], aad: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, JsError> {
+        self.0
+            .decrypt(nonce, aad, ciphertext)
+            .map_err(into_js_error)
     }
+}
+
+/// Result of `CryptoVault.enroll`. Holds the wrapped DEK + wrap nonce
+/// for the caller to persist, plus the freshly-opened `CryptoVault`
+/// which is moved out via `takeVault()`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct EnrollResult(core::EnrollResult);
+
+impl From<core::EnrollResult> for EnrollResult {
+    fn from(value: core::EnrollResult) -> Self {
+        Self(value)
+    }
+}
+
+#[wasm_bindgen]
+impl EnrollResult {
+    /// AES-GCM ciphertext of the DEK (including the 16-byte tag).
+    /// Persist this alongside the credential id and the PRF salt.
+    #[wasm_bindgen(getter, js_name = wrappedDek)]
+    #[must_use]
+    pub fn wrapped_dek(&self) -> Vec<u8> {
+        self.0.wrapped_dek.clone()
+    }
+
+    /// AES-GCM nonce used when wrapping the DEK. Persist alongside the
+    /// wrapped DEK so `unlock` can find it.
+    #[wasm_bindgen(getter, js_name = wrapNonce)]
+    #[must_use]
+    pub fn wrap_nonce(&self) -> Vec<u8> {
+        self.0.wrap_nonce.clone()
+    }
+
+    /// Take ownership of the unlocked vault. Can only be called once;
+    /// throws on the second call so a programming error is loud.
+    #[wasm_bindgen(js_name = takeVault)]
+    pub fn take_vault(&mut self) -> Result<CryptoVault, JsError> {
+        self.0
+            .take_vault()
+            .map(CryptoVault)
+            .ok_or_else(|| JsError::new("EnrollResult.takeVault called twice"))
+    }
+}
+
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "by-value matches the .map_err function-pointer coercion"
+)]
+fn into_js_error<E: core::DisplayError>(e: E) -> JsError {
+    JsError::new(&e.to_string())
 }
