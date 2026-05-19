@@ -10,7 +10,6 @@
 		"check": "biome check .",
 		"check:write": "biome check --write .",
 		"dev": "turbo run dev",
-		"lint": "biome check .",
 		"test": "turbo run test",
 		"typecheck": "turbo run typecheck"
 	},
