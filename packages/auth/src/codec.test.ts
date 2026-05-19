@@ -1,4 +1,3 @@
-// biome-ignore lint/correctness/noNodejsModules: vitest test runs under node
 import { describe, expect, it } from "vitest";
 
 import { base64UrlToBytes, bytesToBase64Url } from "./codec.js";

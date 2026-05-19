@@ -20,6 +20,12 @@ importers:
 
   apps/web:
     dependencies:
+      '@opfs/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
+      '@opfs/core-wasm':
+        specifier: workspace:*
+        version: link:../../packages/core-wasm
       '@opfs/design-tokens':
         specifier: workspace:*
         version: link:../../packages/design-tokens

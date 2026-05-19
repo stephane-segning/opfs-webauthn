@@ -25,7 +25,6 @@ export type {
 	InitOutput,
 	SyncInitInput,
 } from "../dist/opfs_core.js";
-// biome-ignore lint/performance/noBarrelFile: this is the package's public surface
 export {
 	aesGcmNonceLen,
 	aesGcmTagLen,

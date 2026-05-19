@@ -13,6 +13,8 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@opfs/auth": "workspace:*",
+		"@opfs/core-wasm": "workspace:*",
 		"@opfs/design-tokens": "workspace:*",
 		"next": "^15.2.3",
 		"react": "^19.0.0",
