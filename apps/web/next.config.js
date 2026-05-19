@@ -26,7 +26,12 @@ const config = {
 	// out of the box, so we let Next transpile them as if they were
 	// part of the app and map `./foo.js` → `./foo.ts(x)?` during
 	// resolution.
-	transpilePackages: ["@opfs/auth", "@opfs/core-wasm", "@opfs/design-tokens"],
+	transpilePackages: [
+		"@opfs/auth",
+		"@opfs/core-wasm",
+		"@opfs/design-tokens",
+		"@opfs/storage",
+	],
 	webpack(webpackConfig) {
 		webpackConfig.resolve.extensionAlias = {
 			...(webpackConfig.resolve.extensionAlias ?? {}),

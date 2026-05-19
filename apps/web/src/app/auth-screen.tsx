@@ -12,8 +12,8 @@ import {
 import type { CryptoVault } from "@opfs/core-wasm";
 import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
-
 import pkg from "../../package.json";
+import { NotesShell } from "../notes/notes-shell";
 
 const APP_VERSION = pkg.version;
 
@@ -100,6 +100,10 @@ export function AuthScreen() {
 		credentialStore.clear();
 		if (state.kind === "unlocked") state.vault.free();
 		setState({ kind: "fresh" });
+	}
+
+	if (state.kind === "unlocked") {
+		return <NotesShell onLock={doLock} vault={state.vault} />;
 	}
 
 	return (
