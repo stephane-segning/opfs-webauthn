@@ -92,19 +92,37 @@ type Pending = {
 };
 
 /**
- * Page-side handle for the dedicated DB worker. Construct once after
- * the user unlocks the vault; tear down via `close()` on lock.
+ * Minimum surface the page side needs from a worker transport.
+ * Satisfied by both a dedicated `Worker` and a `SharedWorker.port`
+ * (via the adapters in `index.ts`), so `WorkerClient` doesn't care
+ * which transport it owns.
+ */
+export type WorkerLike = {
+	postMessage(data: unknown): void;
+	addEventListener(
+		type: "message",
+		listener: (event: MessageEvent) => void,
+	): void;
+	removeEventListener(
+		type: "message",
+		listener: (event: MessageEvent) => void,
+	): void;
+	close(): void;
+};
+
+/**
+ * Page-side handle for the storage worker. Construct once after the
+ * user unlocks the vault; tear down via `close()` on lock.
  */
 export class WorkerClient {
-	#worker: Worker;
+	readonly #worker: WorkerLike;
 	#pending = new Map<number, Pending>();
 	#nextId = 1;
 	#listeners = new Map<StorageEventName, Set<(payload: unknown) => void>>();
 
-	constructor(worker: Worker) {
+	constructor(worker: WorkerLike) {
 		this.#worker = worker;
 		this.#worker.addEventListener("message", this.#onMessage);
-		this.#worker.addEventListener("error", this.#onError);
 	}
 
 	#onMessage = (event: MessageEvent<ServerEnvelope>): void => {
@@ -131,14 +149,6 @@ export class WorkerClient {
 				for (const fn of listeners) fn(data.notification);
 			}
 		}
-	};
-
-	#onError = (event: ErrorEvent): void => {
-		// Worker died unexpectedly; reject everything in flight so the UI
-		// can surface the failure instead of hanging forever.
-		const err = new Error(`storage worker crashed: ${event.message}`);
-		for (const pending of this.#pending.values()) pending.reject(err);
-		this.#pending.clear();
 	};
 
 	/**
@@ -181,8 +191,7 @@ export class WorkerClient {
 
 	terminate(): void {
 		this.#worker.removeEventListener("message", this.#onMessage);
-		this.#worker.removeEventListener("error", this.#onError);
-		this.#worker.terminate();
+		this.#worker.close();
 		const err = new Error("storage worker terminated");
 		for (const pending of this.#pending.values()) pending.reject(err);
 		this.#pending.clear();

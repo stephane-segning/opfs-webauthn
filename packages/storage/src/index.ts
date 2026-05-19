@@ -1,16 +1,18 @@
 /**
- * `@opfs/storage` — sqlite-wasm + OPFS dedicated-worker writer, with
- * a typed RPC client (multi-tab safety lands in a follow-up PR — see
- * ADR 0006). The page-side `Repo` holds the `CryptoVault` and
- * encrypts row content before it ever crosses into the worker; the
- * worker stores ciphertext-only.
+ * `@opfs/storage` — sqlite-wasm + OPFS writer with a typed RPC
+ * client. Prefers a `SharedWorker` so multiple tabs share one
+ * writer (ADR 0006); falls back to a dedicated `Worker` when
+ * `SharedWorker` is unavailable (notably older iOS Safari).
+ *
+ * The page-side `Repo` holds the `CryptoVault` and encrypts row
+ * content before it ever crosses into the worker; the worker stores
+ * ciphertext only.
  *
  * Usage:
  *
  * ```ts
  * import { createRepo } from "@opfs/storage";
  * const repo = await createRepo({ vault });
- * const page = await repo.listNotes();
  * await repo.upsertNote({ title: "hello", body: "world" });
  * ```
  */
@@ -18,7 +20,7 @@
 import type { CryptoVault } from "@opfs/core-wasm";
 
 import { Repo } from "./repo.js";
-import { WorkerClient } from "./rpc.js";
+import { WorkerClient, type WorkerLike } from "./rpc.js";
 
 export type { ListPage, Note, NoteInput } from "./repo.js";
 export { Repo } from "./repo.js";
@@ -27,26 +29,63 @@ export type { EncryptedNoteRow, StorageEventName } from "./row.js";
 export type CreateRepoOptions = {
 	readonly vault: CryptoVault;
 	/**
-	 * Optional `Worker` factory override — useful for tests that want
-	 * to substitute a stub. Default constructs the bundled
-	 * `db-worker.ts` via `new Worker(new URL(...))`.
+	 * Optional transport override — useful for tests. Default tries
+	 * `SharedWorker`, then falls back to a dedicated `Worker`.
 	 */
-	readonly workerFactory?: () => Worker;
+	readonly transport?: WorkerLike;
 };
 
-function defaultWorker(): Worker {
-	return new Worker(new URL("./db-worker.ts", import.meta.url), {
+const SHARED_WORKER_NAME = "opfs-storage-db";
+
+const supportsSharedWorker = (): boolean =>
+	typeof globalThis !== "undefined" &&
+	typeof (globalThis as { SharedWorker?: unknown }).SharedWorker !==
+		"undefined";
+
+function adaptDedicated(worker: Worker): WorkerLike {
+	return {
+		postMessage: (data) => worker.postMessage(data),
+		addEventListener: (type, listener) =>
+			worker.addEventListener(type, listener),
+		removeEventListener: (type, listener) =>
+			worker.removeEventListener(type, listener),
+		close: () => worker.terminate(),
+	};
+}
+
+function adaptShared(shared: SharedWorker): WorkerLike {
+	shared.port.start();
+	return {
+		postMessage: (data) => shared.port.postMessage(data),
+		addEventListener: (type, listener) =>
+			shared.port.addEventListener(type, listener),
+		removeEventListener: (type, listener) =>
+			shared.port.removeEventListener(type, listener),
+		close: () => shared.port.close(),
+	};
+}
+
+function defaultTransport(): WorkerLike {
+	if (supportsSharedWorker()) {
+		const shared = new SharedWorker(
+			new URL("./db-shared-worker.ts", import.meta.url),
+			{ type: "module", name: SHARED_WORKER_NAME },
+		);
+		return adaptShared(shared);
+	}
+	const dedicated = new Worker(new URL("./db-worker.ts", import.meta.url), {
 		type: "module",
-		name: "opfs-storage-db",
+		name: SHARED_WORKER_NAME,
 	});
+	return adaptDedicated(dedicated);
 }
 
 /**
- * Boot the dedicated DB worker and return a ready-to-use `Repo`.
+ * Boot the storage worker and return a ready-to-use `Repo`.
  */
 export async function createRepo(opts: CreateRepoOptions): Promise<Repo> {
-	const worker = opts.workerFactory ? opts.workerFactory() : defaultWorker();
-	const client = new WorkerClient(worker);
+	const transport = opts.transport ?? defaultTransport();
+	const client = new WorkerClient(transport);
 	const repo = new Repo(client, opts.vault);
 	await repo.bootstrap();
 	return repo;
