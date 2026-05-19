@@ -5,9 +5,14 @@
  *
  * Use:
  * ```ts
- * import init, { codeForPubkey, verifyCode } from "@opfs/core-wasm";
+ * import init, { CryptoVault, codeForPubkey } from "@opfs/core-wasm";
  * await init();
- * const code = codeForPubkey(epk);
+ *
+ * const dek = crypto.getRandomValues(new Uint8Array(32));
+ * const wrapNonce = crypto.getRandomValues(new Uint8Array(12));
+ * const enroll = CryptoVault.enroll(dek, wrapNonce, prfOutput, prfSalt);
+ * // persist enroll.wrappedDek + enroll.wrapNonce in OPFS, keep the vault
+ * const vault = enroll.takeVault();
  * ```
  */
 
@@ -15,6 +20,22 @@ export type {
 	InitInput,
 	InitOutput,
 	SyncInitInput,
+} from "../dist/opfs_core.js";
+// biome-ignore lint/performance/noBarrelFile: this is the package's public surface
+export {
+	aesGcmNonceLen,
+	aesGcmTagLen,
+	CryptoVault,
+	codeForPubkey,
+	commitmentCodeLen,
+	default,
+	default as init,
+	dekLen,
+	EnrollResult,
+	initSync,
+	protocolVersion,
+	verifyCode,
+	x25519PubkeyLen,
 } from "../dist/opfs_core.js";
 
 // Compile-time constants. Mirror the values the wasm functions return
@@ -24,16 +45,7 @@ export type {
 // drift is obvious in review.
 export const PROTOCOL_VERSION = 1 as const;
 export const X25519_PUBKEY_LEN = 32 as const;
-export const AES_GCM_NONCE_LEN = 12 as const;
 export const COMMITMENT_CODE_LEN = 12 as const;
-// biome-ignore lint/performance/noBarrelFile: this is the package's public surface
-export {
-	codeForPubkey,
-	commitmentCodeLen,
-	default,
-	default as init,
-	initSync,
-	protocolVersion,
-	verifyCode,
-	x25519PubkeyLen,
-} from "../dist/opfs_core.js";
+export const DEK_LEN = 32 as const;
+export const AES_GCM_NONCE_LEN = 12 as const;
+export const AES_GCM_TAG_LEN = 16 as const;

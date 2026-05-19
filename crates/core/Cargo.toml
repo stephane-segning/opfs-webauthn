@@ -26,3 +26,4 @@ opfs-crypto = { path = "../crypto" }
 opfs-repo = { path = "../repo" }
 opfs-share-protocol = { path = "../share-protocol" }
 wasm-bindgen = "0.2"
+zeroize = { workspace = true }
