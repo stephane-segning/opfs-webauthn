@@ -10,13 +10,16 @@ import {
 	type VaultCredential,
 } from "@opfs/auth";
 import type { CryptoVault } from "@opfs/core-wasm";
+import { useTranslations } from "next-intl";
 import { useEffect, useState } from "react";
 
-import { version } from "../../package.json";
+import pkg from "../../package.json";
+
+const APP_VERSION = pkg.version;
 
 type State =
 	| { readonly kind: "loading" }
-	| { readonly kind: "unsupported"; readonly reason: string }
+	| { readonly kind: "unsupported" }
 	| { readonly kind: "fresh" }
 	| { readonly kind: "locked"; readonly credential: VaultCredential }
 	| { readonly kind: "busy"; readonly what: "enrolling" | "unlocking" }
@@ -31,24 +34,21 @@ type State =
 			readonly retry: () => void;
 	  };
 
-function errorMessage(err: unknown): string {
+function errorMessageFrom(err: unknown, fallback: string): string {
 	if (err instanceof AuthUnsupportedError) return err.message;
 	if (err instanceof AuthCeremonyError) return err.message;
 	if (err instanceof Error) return err.message;
-	return "Unknown error";
+	return fallback;
 }
 
 export function AuthScreen() {
+	const t = useTranslations();
 	const [state, setState] = useState<State>({ kind: "loading" });
 
 	useEffect(() => {
 		const support = detectSupport();
 		if (!support.webauthn) {
-			setState({
-				kind: "unsupported",
-				reason:
-					"This browser does not expose WebAuthn. Use a recent Chrome, Safari, Firefox, or Edge on a device with a built-in authenticator.",
-			});
+			setState({ kind: "unsupported" });
 			return;
 		}
 		const stored = credentialStore.get();
@@ -70,7 +70,7 @@ export function AuthScreen() {
 		} catch (err) {
 			setState({
 				kind: "error",
-				message: errorMessage(err),
+				message: errorMessageFrom(err, t("auth.error.unknown")),
 				retry: () => setState({ kind: "fresh" }),
 			});
 		}
@@ -84,7 +84,7 @@ export function AuthScreen() {
 		} catch (err) {
 			setState({
 				kind: "error",
-				message: errorMessage(err),
+				message: errorMessageFrom(err, t("auth.error.unknown")),
 				retry: () => setState({ kind: "locked", credential }),
 			});
 		}
@@ -106,56 +106,65 @@ export function AuthScreen() {
 		<main className="auth-screen">
 			<section aria-live="polite" className="auth-card">
 				<header>
-					<p className="auth-tag">opfs-webauthn · v{version}</p>
-					<h1>{title(state)}</h1>
-					<p className="auth-blurb">{blurb(state)}</p>
+					<p className="auth-tag">
+						{t("app.name")} · v{APP_VERSION}
+					</p>
+					<h1>{titleFor(state, t)}</h1>
+					<p className="auth-blurb">{blurbFor(state, t)}</p>
 				</header>
-				{renderActions(state, { doEnroll, doUnlock, doLock, doForget })}
+				{actionsFor(state, t, { doEnroll, doUnlock, doLock, doForget })}
 			</section>
 		</main>
 	);
 }
 
-function title(state: State): string {
+type T = ReturnType<typeof useTranslations>;
+
+function titleFor(state: State, t: T): string {
 	switch (state.kind) {
 		case "loading":
-			return "Loading…";
+			return t("auth.loading.title");
 		case "unsupported":
-			return "Browser not supported";
+			return t("auth.unsupported.title");
 		case "fresh":
-			return "Your notes, locked to a passkey.";
+			return t("auth.fresh.title");
 		case "locked":
-			return "Welcome back.";
+			return t("auth.locked.title");
 		case "busy":
-			return state.what === "enrolling" ? "Creating your vault…" : "Unlocking…";
+			return t(
+				state.what === "enrolling"
+					? "auth.busy.enrollingTitle"
+					: "auth.busy.unlockingTitle",
+			);
 		case "unlocked":
-			return "Vault open.";
+			return t("auth.unlocked.title");
 		case "error":
-			return "Something went wrong";
+			return t("auth.error.title");
 	}
 }
 
-function blurb(state: State): string {
+function blurbFor(state: State, t: T): string {
 	switch (state.kind) {
 		case "loading":
-			return "Looking for an existing vault on this device.";
+			return t("auth.loading.blurb");
 		case "unsupported":
-			return state.reason;
+			return t("auth.unsupportedReason");
 		case "fresh":
-			return "Everything stays on this device. The only way in is the passkey you create — no email, no password, no recovery codes.";
+			return t("auth.fresh.blurb");
 		case "locked":
-			return "Tap to unlock with the passkey you enrolled on this device.";
+			return t("auth.locked.blurb");
 		case "busy":
-			return "Follow the prompt from your authenticator. This may take a few seconds.";
+			return t("auth.busy.blurb");
 		case "unlocked":
-			return "Notes UI lands in the next PR. For now this proves the WebAuthn PRF → wasm CryptoVault chain works end-to-end.";
+			return t("auth.unlocked.blurb");
 		case "error":
 			return state.message;
 	}
 }
 
-function renderActions(
+function actionsFor(
 	state: State,
+	t: T,
 	actions: {
 		doEnroll: () => void;
 		doUnlock: (credential: VaultCredential) => void;
@@ -166,20 +175,21 @@ function renderActions(
 	switch (state.kind) {
 		case "loading":
 			return (
-				<div aria-label="Loading" className="auth-spinner" role="status" />
+				<div
+					aria-label={t("auth.loading.spinnerLabel")}
+					className="auth-spinner"
+					role="status"
+				/>
 			);
 		case "unsupported":
-			return <p className="auth-foot">No fallback is available.</p>;
+			return <p className="auth-foot">{t("auth.unsupportedFallback")}</p>;
 		case "fresh":
 			return (
 				<>
 					<button className="auth-cta" onClick={actions.doEnroll} type="button">
-						Create encrypted vault
+						{t("auth.fresh.create")}
 					</button>
-					<p className="auth-foot">
-						Lose every device with this passkey and the vault is unrecoverable —
-						by design.
-					</p>
+					<p className="auth-foot">{t("auth.fresh.foot")}</p>
 				</>
 			);
 		case "locked":
@@ -190,14 +200,14 @@ function renderActions(
 						onClick={() => actions.doUnlock(state.credential)}
 						type="button"
 					>
-						Unlock
+						{t("auth.locked.unlock")}
 					</button>
 					<button
 						className="auth-link"
 						onClick={actions.doForget}
 						type="button"
 					>
-						Forget vault on this device
+						{t("auth.locked.forget")}
 					</button>
 				</>
 			);
@@ -205,21 +215,25 @@ function renderActions(
 			return (
 				<button className="auth-cta" disabled type="button">
 					<span aria-hidden="true" className="auth-spinner-inline" />
-					{state.what === "enrolling" ? "Creating vault…" : "Unlocking…"}
+					{t(
+						state.what === "enrolling"
+							? "auth.busy.enrollingLabel"
+							: "auth.busy.unlockingLabel",
+					)}
 				</button>
 			);
 		case "unlocked":
 			return (
 				<>
 					<button className="auth-cta" onClick={actions.doLock} type="button">
-						Lock vault
+						{t("auth.unlocked.lock")}
 					</button>
 					<button
 						className="auth-link"
 						onClick={actions.doForget}
 						type="button"
 					>
-						Forget vault on this device
+						{t("auth.locked.forget")}
 					</button>
 				</>
 			);
@@ -230,7 +244,7 @@ function renderActions(
 						{state.message}
 					</p>
 					<button className="auth-cta" onClick={state.retry} type="button">
-						Try again
+						{t("auth.error.retry")}
 					</button>
 				</>
 			);

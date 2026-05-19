@@ -1,0 +1,46 @@
+{
+	"app": {
+		"name": "opfs-webauthn"
+	},
+	"auth": {
+		"unsupportedReason": "This browser does not expose WebAuthn. Use a recent Chrome, Safari, Firefox, or Edge on a device with a built-in authenticator.",
+		"unsupportedFallback": "No fallback is available.",
+		"loading": {
+			"title": "Loading…",
+			"blurb": "Looking for an existing vault on this device.",
+			"spinnerLabel": "Loading"
+		},
+		"unsupported": {
+			"title": "Browser not supported"
+		},
+		"fresh": {
+			"title": "Your notes, locked to a passkey.",
+			"blurb": "Everything stays on this device. The only way in is the passkey you create — no email, no password, no recovery codes.",
+			"create": "Create encrypted vault",
+			"foot": "Lose every device with this passkey and the vault is unrecoverable — by design."
+		},
+		"locked": {
+			"title": "Welcome back.",
+			"blurb": "Tap to unlock with the passkey you enrolled on this device.",
+			"unlock": "Unlock",
+			"forget": "Forget vault on this device"
+		},
+		"busy": {
+			"enrollingTitle": "Creating your vault…",
+			"unlockingTitle": "Unlocking…",
+			"blurb": "Follow the prompt from your authenticator. This may take a few seconds.",
+			"enrollingLabel": "Creating vault…",
+			"unlockingLabel": "Unlocking…"
+		},
+		"unlocked": {
+			"title": "Vault open.",
+			"blurb": "Notes UI lands in the next PR. For now this proves the WebAuthn PRF → wasm CryptoVault chain works end-to-end.",
+			"lock": "Lock vault"
+		},
+		"error": {
+			"title": "Something went wrong",
+			"unknown": "Unknown error",
+			"retry": "Try again"
+		}
+	}
+}

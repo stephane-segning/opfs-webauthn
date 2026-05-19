@@ -8,6 +8,10 @@
  * a project URL (e.g. `/opfs-webauthn`).
  */
 
+import createNextIntlPlugin from "next-intl/plugin";
+
+const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
+
 const isExport = process.env.NEXT_OUTPUT_EXPORT === "1";
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
@@ -32,4 +36,4 @@ const config = {
 	},
 };
 
-export default config;
+export default withNextIntl(config);
