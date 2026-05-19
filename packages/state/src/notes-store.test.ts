@@ -144,10 +144,15 @@ describe("createNotesStore", () => {
 			archived: false,
 		});
 		fake.listNotes = async (): Promise<ListPage> => {
+			// Capture the sequence number *before* awaiting the gate.
+			// Codex caught that reading `call` after the await would
+			// let the slow call also return "call-2", which would make
+			// the assertion pass even if the LWW guard misfired.
 			call += 1;
-			if (call === 1) await slowGate;
+			const ordinal = call;
+			if (ordinal === 1) await slowGate;
 			else await fastGate;
-			return { notes: [noteFor(`call-${call}`)], nextCursor: null };
+			return { notes: [noteFor(`call-${ordinal}`)], nextCursor: null };
 		};
 
 		const slow = store.getState().reload();
