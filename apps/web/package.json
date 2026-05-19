@@ -10,12 +10,14 @@
 		"dev": "next dev --turbo",
 		"preview": "next build && next start",
 		"start": "next start",
+		"test": "vitest run",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
 		"@opfs/auth": "workspace:*",
 		"@opfs/core-wasm": "workspace:*",
 		"@opfs/design-tokens": "workspace:*",
+		"@opfs/storage": "workspace:*",
 		"next": "^15.2.3",
 		"next-intl": "^3.26.0",
 		"react": "^19.0.0",
@@ -29,6 +31,7 @@
 		"@types/react-dom": "^19.0.0",
 		"postcss": "^8.5.3",
 		"tailwindcss": "^4.0.15",
-		"typescript": "^5.8.2"
+		"typescript": "^5.8.2",
+		"vitest": "^2.1.0"
 	}
 }

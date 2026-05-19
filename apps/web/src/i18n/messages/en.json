@@ -42,5 +42,33 @@
 			"unknown": "Unknown error",
 			"retry": "Try again"
 		}
+	},
+	"notes": {
+		"shell": {
+			"title": "Notes",
+			"lock": "Lock",
+			"new": "New note",
+			"loading": "Opening your vault…"
+		},
+		"list": {
+			"region": "Notes"
+		},
+		"empty": {
+			"title": "No notes yet.",
+			"blurb": "Tap “New note” to write your first one. Everything stays on this device."
+		},
+		"card": {
+			"untitled": "Untitled"
+		},
+		"editor": {
+			"region": "Note editor",
+			"cancel": "Cancel",
+			"save": "Save",
+			"archive": "Archive",
+			"titleLabel": "Title",
+			"bodyLabel": "Body",
+			"titlePlaceholder": "Title",
+			"bodyPlaceholder": "Write something only you can read."
+		}
 	}
 }
