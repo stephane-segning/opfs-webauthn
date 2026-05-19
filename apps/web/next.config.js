@@ -15,7 +15,7 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 /** @type {import("next").NextConfig} */
 const config = {
 	...(isExport ? { output: "export" } : {}),
-	...(basePath ? { basePath, assetPrefix: basePath } : {}),
+	...(basePath ? { basePath } : {}),
 	images: { unoptimized: isExport },
 	trailingSlash: isExport,
 };
