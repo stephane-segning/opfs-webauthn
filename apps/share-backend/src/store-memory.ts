@@ -1,7 +1,12 @@
 /**
- * In-memory `RendezvousStore` used by tests. Implements the same
- * single-pickup + collision-reject semantics as the KV-backed store
- * so the router tests don't need to mock KV.
+ * In-memory `RendezvousStore` used by tests. Mirrors the Cloudflare
+ * store's contract — single-shot blob, collision-reject mint,
+ * expired-but-stored records still returned — so the router tests
+ * cover the same code paths the production binding exercises.
+ *
+ * The "sweep" runs against wall-clock time only; the handler's
+ * injectable `now()` advances independently, which is what lets us
+ * test the expired-rendezvous → `410 Gone` path deterministically.
  */
 
 import type { RendezvousRecord, RendezvousStore } from "./store.js";

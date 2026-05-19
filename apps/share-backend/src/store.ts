@@ -26,7 +26,13 @@ export interface RendezvousStore {
 		ttlSeconds: number,
 	): Promise<boolean>;
 
-	/** Look up the recipient's epk for `code`, or `null` if absent/expired. */
+	/**
+	 * Look up the recipient's epk for `code`. Returns `null` only if
+	 * the record is truly absent; an expired-but-still-stored record
+	 * is returned and the handler decides between `404` and `410`.
+	 * Collapsing both states inside the store would lose the
+	 * documented "missing vs. expired" distinction in the API.
+	 */
 	getRendezvous(code: string): Promise<RendezvousRecord | null>;
 
 	/**

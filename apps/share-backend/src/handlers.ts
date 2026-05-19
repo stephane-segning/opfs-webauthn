@@ -31,9 +31,24 @@ export type Deps = {
 
 const APP_OCTET_STREAM = "application/octet-stream";
 
+/**
+ * Read a binary request body, capped at `max` bytes. We check the
+ * declared `Content-Length` first so we can reject oversize uploads
+ * before allocating the buffer — otherwise an attacker can force
+ * the Worker to buffer megabytes only to throw `413`.
+ */
 async function readBinary(request: Request, max: number): Promise<Uint8Array> {
+	const declared = request.headers.get("content-length");
+	if (declared !== null) {
+		const parsed = Number.parseInt(declared, 10);
+		if (Number.isFinite(parsed) && parsed > max) {
+			throw payloadTooLarge(`body exceeds ${max} bytes`);
+		}
+	}
 	const buf = await request.arrayBuffer();
 	if (buf.byteLength > max) {
+		// A missing or lying `Content-Length` still hits this guard,
+		// so the cap is enforced even when the header can't be trusted.
 		throw payloadTooLarge(`body exceeds ${max} bytes`);
 	}
 	return new Uint8Array(buf);
@@ -41,6 +56,16 @@ async function readBinary(request: Request, max: number): Promise<Uint8Array> {
 
 function assertCode(code: string): void {
 	if (code.length !== CODE_LEN) throw badRequest("malformed code");
+}
+
+/**
+ * Seconds until the rendezvous record expires, floored at one second
+ * so callers always get a positive TTL they can hand to KV/R2 — those
+ * APIs reject zero. The caller should also verify expiry separately
+ * (this just bounds the lifetime of the dependent record).
+ */
+function remainingTtl(expiresAt: number, now: number): number {
+	return Math.max(1, expiresAt - now);
 }
 
 /**
@@ -107,7 +132,13 @@ export async function uploadBlob(
 	if (record.expiresAt <= deps.now()) throw gone();
 	const blob = await readBinary(request, MAX_BLOB_BYTES);
 	if (blob.length === 0) throw badRequest("empty blob");
-	const ok = await deps.store.putBlob(code, blob, RENDEZVOUS_TTL_SECONDS);
+	// Clamp the blob's lifetime to whatever's left on the rendezvous
+	// so a late upload can't extend pickup validity past `expiresAt`.
+	const ok = await deps.store.putBlob(
+		code,
+		blob,
+		remainingTtl(record.expiresAt, deps.now()),
+	);
 	if (!ok) throw conflict("blob already uploaded");
 	return new Response(null, { status: 204 });
 }

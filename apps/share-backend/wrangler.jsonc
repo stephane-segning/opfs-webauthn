@@ -4,21 +4,26 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2026-05-01",
 	"compatibility_flags": ["nodejs_compat"],
-	// Two KV namespaces:
-	//   RENDEZVOUS — short-lived `{code -> {epk, expiresAt}}` map.
-	//   BLOBS      — opaque share-blob bytes, picked up exactly once.
-	// Run `wrangler kv namespace create RENDEZVOUS` (and BLOBS) once
-	// and paste the returned ids here. The frontend reads
-	// `NEXT_PUBLIC_SHARE_BACKEND_URL`; this Worker is loosely coupled
-	// to the static site (ADR 0007).
+	// KV holds the short-lived `{code -> {epk, expiresAt}}` map plus
+	// the per-IP mint counter. R2 holds the opaque share blob — R2's
+	// conditional put (`etagDoesNotMatch: "*"`) gives us atomic
+	// single-upload semantics that KV cannot. Create both before
+	// deploying:
+	//   wrangler kv namespace create RENDEZVOUS
+	//   wrangler r2 bucket create opfs-share-blobs
+	// Hard rate limiting (DoS, brute force) is configured at the
+	// Cloudflare zone level via WAF Rate Limiting Rules — the
+	// in-code KV counter is best-effort defense-in-depth.
 	"kv_namespaces": [
 		{
 			"binding": "RENDEZVOUS",
 			"id": "REPLACE_WITH_RENDEZVOUS_KV_ID"
-		},
+		}
+	],
+	"r2_buckets": [
 		{
 			"binding": "BLOBS",
-			"id": "REPLACE_WITH_BLOBS_KV_ID"
+			"bucket_name": "opfs-share-blobs"
 		}
 	],
 	"vars": {

@@ -123,6 +123,24 @@ describe("router — error and abuse paths", () => {
 		expect(response.status).toBe(413);
 	});
 
+	it("rejects oversize uploads via Content-Length before buffering", async () => {
+		const minted = await mint(helpers.deps, epkOf(11));
+		const code = minted.json.code as string;
+		// Send a *small* body but lie about its size in the header. The
+		// handler should refuse based on the declared length and never
+		// touch `arrayBuffer()` — that's how we know the pre-buffer
+		// check fired rather than the post-buffer guard.
+		const response = await route(
+			new Request(`${ORIGIN}/rendezvous/${code}/blob`, {
+				method: "POST",
+				headers: { "content-length": String(MAX_BLOB_BYTES + 1) },
+				body: new Uint8Array([1, 2, 3]),
+			}),
+			helpers.deps,
+		);
+		expect(response.status).toBe(413);
+	});
+
 	it("returns 404 for an unknown code", async () => {
 		const response = await route(
 			new Request(`${ORIGIN}/rendezvous/AAAAAAAAAAAA`),
@@ -198,6 +216,36 @@ describe("router — error and abuse paths", () => {
 		// store still has the record (KV TTL is fuzzy), the handler
 		// refuses to serve it — that's the 410 Gone surface.
 		expect(response.status).toBe(410);
+	});
+
+	it("clamps blob TTL to the rendezvous's remaining lifetime", async () => {
+		const minted = await mint(helpers.deps, epkOf(8));
+		const code = minted.json.code as string;
+		// Advance until ~30s remain on the rendezvous, then upload.
+		helpers.advance(270);
+		// Spy on the store so we can read back the TTL the handler
+		// passed to `putBlob` — observable behavior, no internals
+		// leaked.
+		const seenTtls: number[] = [];
+		const realPut = helpers.deps.store.putBlob.bind(helpers.deps.store);
+		helpers.deps.store.putBlob = (c, b, ttl) => {
+			seenTtls.push(ttl);
+			return realPut(c, b, ttl);
+		};
+		const response = await route(
+			new Request(`${ORIGIN}/rendezvous/${code}/blob`, {
+				method: "POST",
+				body: new Uint8Array([9, 9, 9]),
+			}),
+			helpers.deps,
+		);
+		expect(response.status).toBe(204);
+		expect(seenTtls).toHaveLength(1);
+		const ttl = seenTtls[0] as number;
+		// 300s mint TTL − 270s advance = 30s remaining. The handler
+		// must hand R2/KV a TTL bounded by that — not a fresh 300.
+		expect(ttl).toBeLessThanOrEqual(30);
+		expect(ttl).toBeGreaterThan(0);
 	});
 
 	it("rate-limits a single IP after the mint cap", async () => {
