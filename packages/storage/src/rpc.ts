@@ -63,6 +63,29 @@ type ServerEnvelope =
 			readonly notification: WorkerNotification;
 	  };
 
+/** Build a success envelope for request `id`. */
+export const respond = (
+	id: number,
+	response: WorkerResponse,
+): ServerEnvelope => ({
+	kind: "response",
+	id,
+	response,
+});
+
+/** Build a failure envelope. */
+export const fail = (id: number, message: string): ServerEnvelope => ({
+	kind: "error",
+	id,
+	message,
+});
+
+/** Build a broadcast notification envelope (no `id`). */
+export const notify = (notification: WorkerNotification): ServerEnvelope => ({
+	kind: "notification",
+	notification,
+});
+
 type Pending = {
 	readonly resolve: (value: WorkerResponse) => void;
 	readonly reject: (reason: Error) => void;
@@ -118,13 +141,27 @@ export class WorkerClient {
 		this.#pending.clear();
 	};
 
-	send<R extends WorkerRequest>(request: R): Promise<WorkerResponse> {
+	/**
+	 * Send a request and resolve to the matching-kind response. Throws
+	 * if the worker replies with a different kind (which would be a
+	 * protocol bug). This is the only place the response-kind guard
+	 * lives; callers get a fully-narrowed result.
+	 */
+	async send<R extends WorkerRequest>(
+		request: R,
+	): Promise<Extract<WorkerResponse, { kind: R["kind"] }>> {
 		const id = this.#nextId++;
 		const envelope: ClientEnvelope<R> = { id, request };
-		return new Promise<WorkerResponse>((resolve, reject) => {
+		const response = await new Promise<WorkerResponse>((resolve, reject) => {
 			this.#pending.set(id, { resolve, reject });
 			this.#worker.postMessage(envelope);
 		});
+		if (response.kind !== request.kind) {
+			throw new Error(
+				`storage worker replied with ${response.kind}, expected ${request.kind}`,
+			);
+		}
+		return response as Extract<WorkerResponse, { kind: R["kind"] }>;
 	}
 
 	on<K extends StorageEventName>(
