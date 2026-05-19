@@ -24,6 +24,12 @@ export type NoteEditorProps = {
 	readonly onCancel: () => void;
 	readonly onSave: (draft: Draft) => Promise<void>;
 	readonly onArchive?: (id: string) => Promise<void>;
+	/**
+	 * Optional share affordance — only passed when the share backend
+	 * is configured and the note is already saved (drafts can't be
+	 * shared until they have a stable id + persisted body).
+	 */
+	readonly onShare?: () => void;
 };
 
 export function NoteEditor({
@@ -31,6 +37,7 @@ export function NoteEditor({
 	onCancel,
 	onSave,
 	onArchive,
+	onShare,
 }: NoteEditorProps) {
 	const t = useTranslations("notes");
 	const [draft, setDraft] = useState<Draft>(fromNote(note));
@@ -115,16 +122,28 @@ export function NoteEditor({
 				placeholder={t("editor.bodyPlaceholder")}
 				value={draft.body}
 			/>
-			{note && onArchive ? (
-				<button
-					className="auth-link note-editor-archive"
-					disabled={busy}
-					onClick={handleArchive}
-					type="button"
-				>
-					{t("editor.archive")}
-				</button>
-			) : null}
+			<div className="note-editor-foot">
+				{note && onShare ? (
+					<button
+						className="auth-link"
+						disabled={busy}
+						onClick={onShare}
+						type="button"
+					>
+						{t("editor.share")}
+					</button>
+				) : null}
+				{note && onArchive ? (
+					<button
+						className="auth-link note-editor-archive"
+						disabled={busy}
+						onClick={handleArchive}
+						type="button"
+					>
+						{t("editor.archive")}
+					</button>
+				) : null}
+			</div>
 		</section>
 	);
 }

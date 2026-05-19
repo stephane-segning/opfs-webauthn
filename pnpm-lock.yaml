@@ -51,6 +51,9 @@ importers:
       '@opfs/design-tokens':
         specifier: workspace:*
         version: link:../../packages/design-tokens
+      '@opfs/share-client':
+        specifier: workspace:*
+        version: link:../../packages/share-client
       '@opfs/storage':
         specifier: workspace:*
         version: link:../../packages/storage

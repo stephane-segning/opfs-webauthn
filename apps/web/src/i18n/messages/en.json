@@ -65,10 +65,43 @@
 			"cancel": "Cancel",
 			"save": "Save",
 			"archive": "Archive",
+			"share": "Share to another device",
 			"titleLabel": "Title",
 			"bodyLabel": "Body",
 			"titlePlaceholder": "Title",
 			"bodyPlaceholder": "Write something only you can read."
+		}
+	},
+	"share": {
+		"dialog": {
+			"close": "Close"
+		},
+		"receive": {
+			"title": "Receive a note",
+			"minting": "Setting up a one-shot pickup window…",
+			"readAloud": "Read this code to the sender. They have five minutes.",
+			"codeLabel": "Pickup code",
+			"waiting": "Waiting for the sender to upload the note.",
+			"received": "Got it. The note has been added to your vault."
+		},
+		"send": {
+			"title": "Send this note",
+			"askCode": "Type the code the recipient shows you. Letters and dashes are both fine.",
+			"codeLabel": "Recipient code",
+			"cta": "Send encrypted",
+			"sending": "Sending…",
+			"sent": "Sent. The recipient is decrypting it now."
+		},
+		"error": {
+			"network": "Couldn't reach the share backend. Check your connection and try again.",
+			"rendezvousNotFound": "No rendezvous with that code. Re-check the letters and digits.",
+			"rendezvousExpired": "That code has expired. Ask the recipient to start a new pickup window.",
+			"commitmentMismatch": "The backend returned a public key that doesn't match the code. Aborting for safety.",
+			"blobAlreadyUploaded": "A note has already been uploaded to that code. Ask for a fresh pickup window.",
+			"blobUnavailable": "The shared note has already been picked up.",
+			"rateLimited": "Too many share attempts from this device. Wait a few minutes.",
+			"originDenied": "The share backend isn't accepting requests from this origin.",
+			"protocol": "Unexpected response from the share backend."
 		}
 	}
 }
