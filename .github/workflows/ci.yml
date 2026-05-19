@@ -57,6 +57,9 @@ jobs:
       - name: Typecheck (all workspaces)
         run: pnpm -r typecheck
 
+      - name: Test (turbo — runs vitest in packages that ship tests)
+        run: pnpm test
+
       - name: Build (turbo)
         run: pnpm build
 

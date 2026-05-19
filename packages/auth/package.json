@@ -15,12 +15,14 @@
 		"src"
 	],
 	"scripts": {
+		"test": "vitest run",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
 		"@opfs/core-wasm": "workspace:*"
 	},
 	"devDependencies": {
-		"typescript": "^5.8.2"
+		"typescript": "^5.8.2",
+		"vitest": "^2.1.0"
 	}
 }
