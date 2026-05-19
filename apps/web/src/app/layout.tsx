@@ -2,6 +2,9 @@ import "../styles/globals.css";
 import "@opfs/design-tokens/tokens.css";
 
 import type { Metadata } from "next";
+import { NextIntlClientProvider } from "next-intl";
+
+import { DEFAULT_LOCALE, messages } from "../i18n";
 
 export const metadata: Metadata = {
 	title: "opfs-webauthn",
@@ -13,8 +16,16 @@ export default function RootLayout({
 	children,
 }: Readonly<{ children: React.ReactNode }>) {
 	return (
-		<html lang="en">
-			<body>{children}</body>
+		<html lang={DEFAULT_LOCALE}>
+			<body>
+				<NextIntlClientProvider
+					locale={DEFAULT_LOCALE}
+					messages={messages[DEFAULT_LOCALE]}
+					timeZone="UTC"
+				>
+					{children}
+				</NextIntlClientProvider>
+			</body>
 		</html>
 	);
 }

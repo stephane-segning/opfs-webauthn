@@ -81,9 +81,74 @@ body {
 	opacity: 0.55;
 }
 
+.auth-cta:disabled {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-2);
+}
+
 .auth-foot {
 	margin: 0;
 	font-size: 0.85rem;
 	color: var(--text-muted);
 	text-align: center;
+}
+
+.auth-link {
+	appearance: none;
+	background: transparent;
+	border: 0;
+	cursor: pointer;
+	width: 100%;
+	padding: var(--space-2);
+	color: var(--text-muted);
+	font: inherit;
+	font-size: 0.9rem;
+	border-radius: var(--radius-md);
+	transition: color var(--motion-medium);
+}
+
+.auth-link:hover,
+.auth-link:focus-visible {
+	color: var(--text-primary);
+	outline: none;
+}
+
+.auth-error {
+	margin: 0;
+	padding: var(--space-3) var(--space-4);
+	background: var(--accent-soft);
+	color: var(--text-primary);
+	border-radius: var(--radius-md);
+	font-size: 0.9rem;
+	line-height: 1.45;
+}
+
+.auth-spinner,
+.auth-spinner-inline {
+	width: 1.1rem;
+	height: 1.1rem;
+	border-radius: 50%;
+	border: 2px solid var(--border-subtle);
+	border-top-color: var(--accent);
+	animation: auth-spin 0.7s linear infinite;
+}
+
+.auth-spinner {
+	margin: var(--space-3) auto 0;
+}
+
+@keyframes auth-spin {
+	to {
+		transform: rotate(1turn);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.auth-spinner,
+	.auth-spinner-inline {
+		animation: none;
+		border-top-color: var(--border-subtle);
+	}
 }

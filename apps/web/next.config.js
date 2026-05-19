@@ -8,6 +8,10 @@
  * a project URL (e.g. `/opfs-webauthn`).
  */
 
+import createNextIntlPlugin from "next-intl/plugin";
+
+const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
+
 const isExport = process.env.NEXT_OUTPUT_EXPORT === "1";
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
@@ -17,6 +21,19 @@ const config = {
 	...(basePath ? { basePath } : {}),
 	images: { unoptimized: isExport },
 	trailingSlash: isExport,
+	// Workspace packages publish TypeScript source with Node ESM-style
+	// `.js` import specifiers. Next.js + webpack can't resolve those
+	// out of the box, so we let Next transpile them as if they were
+	// part of the app and map `./foo.js` → `./foo.ts(x)?` during
+	// resolution.
+	transpilePackages: ["@opfs/auth", "@opfs/core-wasm", "@opfs/design-tokens"],
+	webpack(webpackConfig) {
+		webpackConfig.resolve.extensionAlias = {
+			...(webpackConfig.resolve.extensionAlias ?? {}),
+			".js": [".ts", ".tsx", ".js"],
+		};
+		return webpackConfig;
+	},
 };
 
-export default config;
+export default withNextIntl(config);
