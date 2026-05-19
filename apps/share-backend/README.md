@@ -42,13 +42,44 @@ brute-force barrier is the 60-bit commitment, not this counter.
 
 ## Deploy
 
+### One-time setup
+
 ```sh
-# One-time: create the KV namespace + R2 bucket, paste the KV id into wrangler.jsonc.
-pnpm wrangler kv namespace create RENDEZVOUS
+# Create the KV namespace + R2 bucket on Cloudflare.
+pnpm wrangler kv namespace create RENDEZVOUS   # paste the id into wrangler.jsonc
 pnpm wrangler r2 bucket create opfs-share-blobs
 
+# Lock down the allow-list to your real frontend origin(s) in
+# wrangler.jsonc `vars.ALLOWED_ORIGINS`.
+```
+
+### Manual deploy
+
+```sh
 pnpm --filter @opfs/share-backend deploy
 ```
+
+### CI deploy (recommended)
+
+`.github/workflows/deploy-share-backend.yml` runs `wrangler deploy`
+on every push to `main` that touches `apps/share-backend/**`, and on
+manual `workflow_dispatch`. It requires two repository-level secrets
+/ variables:
+
+1. **`CLOUDFLARE_API_TOKEN`** (repository **secret**) — a Cloudflare
+   API token scoped for Workers Scripts, KV, and R2.
+2. **`CLOUDFLARE_ACCOUNT_ID`** (repository **variable**) — the
+   account id wrangler should publish under.
+
+Once those are set, the next push to `main` deploys the Worker.
+After the first deploy, set **`NEXT_PUBLIC_SHARE_BACKEND_URL`** as a
+repository **variable** to the published `.workers.dev` (or custom)
+URL — the GitHub Pages workflow reads that variable and threads it
+into the static build so the share UI lights up in production.
+
+When `CLOUDFLARE_API_TOKEN` is unset, the deploy workflow short-circuits
+with a notice rather than failing — forks without Cloudflare access
+still get green CI.
 
 Local development:
 

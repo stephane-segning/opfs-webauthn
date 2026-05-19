@@ -28,6 +28,13 @@ jobs:
       # Pages serves this app under a project URL (e.g. /opfs-webauthn);
       # apps/web reads this to set basePath + assetPrefix.
       NEXT_PUBLIC_BASE_PATH: /opfs-webauthn
+      # Optional: if the Cloudflare Worker (ADR 0007, apps/share-backend)
+      # has been deployed and its URL is set as the
+      # `NEXT_PUBLIC_SHARE_BACKEND_URL` repository variable, the
+      # static build wires the share UI to it. Leaving the variable
+      # unset hides the share affordances entirely — there's no
+      # runtime branch to test.
+      NEXT_PUBLIC_SHARE_BACKEND_URL: ${{ vars.NEXT_PUBLIC_SHARE_BACKEND_URL }}
     steps:
       - uses: actions/checkout@v4
 
