@@ -1,37 +1,18 @@
 /**
- * `@opfs/state` — Zustand store contracts (ADR 0009).
+ * `@opfs/state` — Zustand stores for opfs-webauthn (ADR 0009).
  *
- * Each slice is one bounded concern. Stores expose commands (perform
- * an action, optimistically update local state) and selectors (small
- * functions the UI subscribes to). The storage worker dispatches into
- * these stores from outside React via `useNotesStore.getState()`.
+ * Each store is one bounded concern. Commands mutate the slice and
+ * delegate persistence to the `Repo`; selectors are plain functions
+ * over the slice the UI subscribes to via `useStore`.
  *
- * The actual `create()` calls live in their per-slice files alongside
- * the eventual reducer-like cores; this stub declares the slice shape
- * so dependent packages can type-check.
+ * The notes store is bound to a single `Repo` instance — one store
+ * per opened vault. Future slices (vault auth state, share session,
+ * UI theme) will follow the same pattern and land alongside.
  */
 
-import type { Note, NoteInput } from "@opfs/storage";
-
-export type VaultState =
-	| { readonly status: "unsupported" }
-	| { readonly status: "locked" }
-	| { readonly status: "unlocking" }
-	| { readonly status: "unlocked" }
-	| { readonly status: "enrolling" };
-
-export type NotesSlice = {
-	readonly notes: readonly Note[];
-	readonly loaded: boolean;
-	readonly load: () => Promise<void>;
-	readonly upsert: (note: NoteInput) => Promise<void>;
-	readonly archive: (id: string) => Promise<void>;
-	readonly applyTxApplied: (ids: readonly string[]) => void;
-};
-
-export type UiSlice = {
-	readonly theme: "light" | "dark" | "system";
-	readonly sidebarCollapsed: boolean;
-	readonly setTheme: (theme: UiSlice["theme"]) => void;
-	readonly toggleSidebar: () => void;
-};
+export {
+	createNotesStore,
+	type NotesState,
+	type NotesStore,
+	type NotesStoreSnapshot,
+} from "./notes-store.js";

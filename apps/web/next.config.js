@@ -31,6 +31,7 @@ const config = {
 		"@opfs/core-wasm",
 		"@opfs/design-tokens",
 		"@opfs/share-client",
+		"@opfs/state",
 		"@opfs/storage",
 	],
 	webpack(webpackConfig) {
