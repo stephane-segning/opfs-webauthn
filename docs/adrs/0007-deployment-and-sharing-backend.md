@@ -40,12 +40,16 @@ a Node runtime. We must reconcile these.
   server behaving honestly.
 - **The pickup code is a commitment, not a lookup key.** The recipient
   generates an ephemeral X25519 keypair and derives the code as
-  `base32(truncate(BLAKE3(epk), 40 bits))` (8 base32 chars). When the
-  sender fetches the ephemeral pubkey by code, it **re-derives the code
-  from the fetched pubkey** and refuses to proceed if the two do not
-  match. A malicious backend cannot substitute its own pubkey without
-  also producing the matching truncation, which is a 40-bit pre-image
-  problem behind a rate-limited endpoint with a 5-minute TTL.
+  `base32(truncate(BLAKE3(epk), 60 bits))` (12 base32 chars, displayed
+  as two groups of six to make it easier to read aloud). When the
+  sender fetches the ephemeral pubkey by code, it **re-derives the
+  code from the fetched pubkey** and refuses to proceed if the two do
+  not match. A malicious backend cannot substitute its own pubkey
+  without also producing the matching truncation, which is a 60-bit
+  pre-image problem behind a rate-limited endpoint with a 5-minute
+  TTL. We sized at 60 bits — not 40 — because BLAKE3 is fast enough on
+  modern hardware that a 2^40 search is feasible inside the TTL for
+  a motivated attacker; 2^60 is not.
 - **No server-side authentication on `POST /rendezvous`.** We
   considered requiring a WebAuthn assertion on the recipient request,
   but the backend has no registered credential public keys to verify
@@ -76,12 +80,11 @@ a Node runtime. We must reconcile these.
   sees plaintext, the DEK, or the PRF output. We document this and add
   a server-side integration test that asserts requests carrying
   non-opaque bodies are rejected (best-effort, ciphertext is opaque).
-- Pickup codes are short (8 chars, base32, 40 bits of entropy bound
-  to the public key) with rate-limited brute force protection and a
-  default TTL of 5 minutes. Cracking the commitment before expiry on
-  a rate-limited endpoint is bounded; we document the residual risk
-  and keep the door open to a longer code (60 bits) if the research
-  surfaces a real attack budget.
+- Pickup codes are 12 chars, base32, 60 bits of entropy bound to the
+  ephemeral public key, with rate-limited brute force protection and
+  a default TTL of 5 minutes. Cracking a 60-bit pre-image inside a
+  5-minute, rate-limited window is computationally infeasible under
+  any realistic attacker model we care about for a research project.
 
 ### Why two deployment targets
 

@@ -58,6 +58,29 @@ Each package and crate is treated as if it would be published tomorrow.
 | `apps/web`                | Next.js app composition                    | all `packages/*`         |
 | `apps/share-backend`      | Cloudflare Worker                          | `crates/share-protocol` (types only) |
 
+### Cross-language type sync
+
+Several boundaries cross Rust ↔ TypeScript: the share-protocol envelope
+(consumed by `apps/share-backend` in TS), the row codec input/output
+types, and the auth helper return shapes. To keep these from drifting
+we generate the TypeScript definitions from the Rust source with
+**`ts-rs`**:
+
+- Rust structs in `crates/share-protocol`, `crates/repo` (public
+  surface only), and `crates/crypto` (public surface only) are
+  annotated with `#[derive(TS)]`.
+- A `cargo test --package <crate> --features ts-export` step in CI
+  emits `.ts` files into the consuming JS package's `src/generated/`
+  directory.
+- The generated files are committed (not generated at install time)
+  so consumers of the published packages do not need a Rust toolchain.
+- A CI check fails the build if the generated files would change but
+  have not been re-committed.
+
+We chose `ts-rs` over `specta` because we do not need `specta`'s
+runtime introspection — we want plain compile-time `.d.ts` output.
+Either tool would work; we pick one and keep the boundary narrow.
+
 ### Test discipline
 
 - Every crate ships unit tests. `crates/crypto` ships known-answer tests

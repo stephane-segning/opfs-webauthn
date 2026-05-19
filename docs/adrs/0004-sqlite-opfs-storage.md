@@ -36,8 +36,15 @@ Use the official **`sqlite-wasm`** build with the **`opfs-sahpool`** VFS.
   reconstruct activity patterns from precise timestamps. We quantize
   to 24h buckets on disk and store the full timestamp inside the
   encrypted blob, decrypting for any UI surface that needs precision.
-  Day-precision is enough for "sort newest first" and pagination
-  without leaking the user's working hours or burst patterns.
+- **Row IDs are ULIDs** (Crockford base32, 26 chars, lex-sortable by
+  creation time). The ULID is the stable sort tiebreaker that the
+  day-bucket on its own cannot provide. The canonical list query is
+  `ORDER BY updated_day DESC, id DESC` which gives a deterministic
+  page boundary so `LIMIT/OFFSET` paginates correctly; notes touched
+  on the same day fall back to ULID lex order rather than insertion
+  order, but that is stable across requests. Within-day ordering by
+  exact timestamp is the UI's job after decryption and is only
+  applied to the visible page, not the global list.
 - Full-text search is implemented over a transient in-memory index
   rebuilt from the decrypted set on load. We do not store an FTS5 index
   of plaintext on disk.
