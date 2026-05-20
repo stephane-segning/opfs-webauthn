@@ -7,12 +7,12 @@ import type { VaultCredential } from "./types.js";
  *
  * Originally this was a `localStorage` key. Two problems with that
  * home:
- *   1. It surfaces alarmingly in DevTools → Application → Local
+ *   1. It surfaced alarmingly in DevTools → Application → Local
  *      Storage even though the `wrappedDek` is useless without a
  *      passkey ceremony to derive the KEK.
  *   2. `localStorage.clear()` and "clear cookies for this site"
- *      silently nuke the wrap, locking the user out even though
- *      the passkey still exists.
+ *      silently nuked the wrap, locking the user out even though
+ *      the passkey still existed.
  *
  * OPFS is the same scope the encrypted notes already live in (one
  * origin = one vault), and it's much harder to clear by accident —
@@ -20,13 +20,6 @@ import type { VaultCredential } from "./types.js";
  * destructive action.
  */
 const VAULT_FILE = "opfs-webauthn-vault.json";
-
-/**
- * Legacy localStorage key. Read once on first migration, then
- * cleared. Kept here so anyone who enrolled before the OPFS move
- * isn't logged out.
- */
-const LEGACY_LOCAL_STORAGE_KEY = "opfs-webauthn/v1/credential";
 
 type Serialized = {
 	readonly credentialId: string;
@@ -139,28 +132,11 @@ async function deleteVaultFile(): Promise<void> {
 }
 
 /**
- * Read the legacy localStorage entry if it exists. Used once at
- * mount so users who enrolled before the OPFS move aren't locked
- * out — we migrate their credential into OPFS and clear the legacy
- * value in the same call.
- */
-function readLegacy(): VaultCredential | null {
-	if (typeof localStorage === "undefined") return null;
-	const raw = localStorage.getItem(LEGACY_LOCAL_STORAGE_KEY);
-	return raw ? deserialize(raw) : null;
-}
-
-function clearLegacy(): void {
-	if (typeof localStorage === "undefined") return;
-	localStorage.removeItem(LEGACY_LOCAL_STORAGE_KEY);
-}
-
-/**
  * Pluggable adapter for the vault credential. The default singleton
  * persists to OPFS (origin-scoped, hidden from the localStorage tab,
- * survives soft cookie-clears) and migrates from the legacy
- * localStorage key on first read so existing enrollments aren't
- * orphaned.
+ * survives soft cookie-clears). No migration from the previous
+ * localStorage-backed implementation — the project is pre-1.0 and
+ * still in testing, so existing testers just re-enroll.
  */
 export type CredentialStore = {
 	readonly get: () => Promise<VaultCredential | null>;
@@ -169,37 +145,7 @@ export type CredentialStore = {
 };
 
 export const credentialStore: CredentialStore = {
-	async get(): Promise<VaultCredential | null> {
-		const fromOpfs = await readVaultFile();
-		if (fromOpfs) return fromOpfs;
-		// One-shot migration from the legacy home. If the user has
-		// both (shouldn't happen in normal use, but treat OPFS as
-		// canonical), OPFS won above; only get here if OPFS is empty.
-		const legacy = readLegacy();
-		if (legacy) {
-			try {
-				await writeVaultFile(legacy);
-				clearLegacy();
-				return legacy;
-			} catch {
-				// If migration failed (OPFS unavailable, quota, …) return
-				// the legacy value anyway so the user can still unlock.
-				// `set()` on a successful enroll will retry the move.
-				return legacy;
-			}
-		}
-		return null;
-	},
-	async set(credential): Promise<void> {
-		await writeVaultFile(credential);
-		// Belt-and-suspenders: if the legacy entry is still hanging
-		// around (e.g. migration didn't fire because the OPFS file
-		// already existed), clear it on every successful write so
-		// the localStorage tab stops showing it.
-		clearLegacy();
-	},
-	async clear(): Promise<void> {
-		await deleteVaultFile();
-		clearLegacy();
-	},
+	get: readVaultFile,
+	set: writeVaultFile,
+	clear: deleteVaultFile,
 };
