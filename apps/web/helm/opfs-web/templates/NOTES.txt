@@ -1,0 +1,18 @@
+{{- $svc := include "opfs-web.fullname" . -}}
+opfs-web installed as {{ $svc }} in namespace {{ .Release.Namespace }}.
+
+Knative will surface the URL on the Service status; watch with:
+
+  kubectl -n {{ .Release.Namespace }} get ksvc {{ $svc }} -w
+
+Point the production DNS (`ocs.vaam.store`) at the Knative ingress
+once the Service is `Ready=True`. Cross-origin isolation requires
+the document URL to be served from a single origin — switching
+DNS to a different hostname per environment is fine, but mixing
+hostnames mid-session will break `crossOriginIsolated`.
+
+To verify cross-origin isolation is live, open the deployed URL in
+DevTools console and run:
+
+  crossOriginIsolated  // expect: true
+  typeof SharedArrayBuffer  // expect: "function"

@@ -23,7 +23,7 @@ choice in this repo.
 ```
 .
 ├── apps/
-│   ├── web/                 Next.js app (static-exported to GitHub Pages)
+│   ├── web/                 Next.js app (self-hosted on Knative, ADR 0013)
 │   └── share-backend/       Rust + Knative rendezvous service (ADR 0012)
 ├── packages/                JS/TS workspace packages (ADR 0010)
 │   ├── auth/                WebAuthn PRF ceremonies

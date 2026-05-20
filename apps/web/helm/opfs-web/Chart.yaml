@@ -1,0 +1,27 @@
+apiVersion: v2
+name: opfs-web
+description: |
+  Knative Service for the opfs-webauthn static frontend (ADR 0013).
+  Serves the Next.js export with `Cross-Origin-Opener-Policy` +
+  `Cross-Origin-Embedder-Policy` so the browser exposes
+  `SharedArrayBuffer` and sqlite-wasm's OPFS VFSes can use it.
+type: application
+
+version: 0.1.0
+appVersion: "0.1.0"
+
+home: https://github.com/stephane-segning/opfs-webauthn
+sources:
+  - https://github.com/stephane-segning/opfs-webauthn
+keywords:
+  - knative
+  - opfs-webauthn
+  - frontend
+  - pwa
+maintainers:
+  - name: Stephane Segning
+    url: https://github.com/stephane-segning
+
+annotations:
+  artifacthub.io/prerelease: "false"
+  artifacthub.io/category: networking
