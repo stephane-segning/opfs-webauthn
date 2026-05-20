@@ -28,8 +28,12 @@ spec:
           image: {{ include "opfs-share-backend.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
+            # Single Knative port. The container must listen on
+            # exactly this address; `env.port` flows through to the
+            # backend's `PORT` env so the two stay in lockstep when
+            # operators override either.
             - name: http1
-              containerPort: 8080
+              containerPort: {{ .Values.env.port | int }}
           env:
             - name: PORT
               value: {{ .Values.env.port | quote }}

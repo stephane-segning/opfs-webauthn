@@ -9,10 +9,16 @@ The chart is published as an OCI artifact to GHCR alongside the
 container image. Both are signed keylessly via Sigstore by the
 build workflow.
 
+Pick a published version (the build workflow auto-bumps the patch
+version per push to `main`, so `0.1.0` from this source tree is
+**not** what's on the registry):
+
 ```sh
+helm pull oci://ghcr.io/stephane-segning/charts/opfs-share-backend --version 0.1.42
+# or, inline:
 helm install opfs-share-backend \
   oci://ghcr.io/stephane-segning/charts/opfs-share-backend \
-  --version 0.1.0 \
+  --version 0.1.42 \
   --namespace opfs --create-namespace
 ```
 
@@ -42,7 +48,7 @@ common overrides:
 | Key | Default | Notes |
 | --- | --- | --- |
 | `image.repository` | `ghcr.io/stephane-segning/opfs-share-backend` | Forks / org migrations override here. |
-| `image.tag` | `""` (→ `Chart.AppVersion`) | Image Updater rewrites this to pin digests. |
+| `image.tag` | `""` (→ `Chart.AppVersion` → `latest`) | Published charts pin AppVersion to a short SHA; Image Updater rewrites this to digest. |
 | `autoscaling.maxScale` | `"1"` | The in-memory store is per-pod; raising this needs a shared store first. |
 | `env.allowedOrigins` | `https://ocs.vaam.store` | Comma-separated CORS list. |
 | `env.trustedIpHeader` | `x-real-ip` | Per-IP rate-limit key; never `X-Forwarded-For`. |

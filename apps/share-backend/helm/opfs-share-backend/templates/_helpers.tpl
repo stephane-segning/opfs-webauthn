@@ -42,8 +42,20 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 Compose the full image reference. Lets Image Updater (or a
 per-env overlay) override either `image.repository` or `image.tag`
 without forcing both.
+
+Tag resolution:
+  1. `.Values.image.tag` if set (ArgoCD Image Updater writes the
+     resolved digest here on every promotion).
+  2. else `.Chart.AppVersion` — the publish workflow rewrites this
+     to the `<short-sha>` it just pushed so a released chart pins
+     to a real image.
+  3. else `"latest"` — fallback for a fresh `helm install` from
+     repo source before CI has bumped `appVersion`. The build
+     workflow always pushes a `:latest` tag, so this is a real,
+     resolvable image; it's just mutable, which is fine for a dev
+     install and irrelevant in production (Updater rewrites it).
 */}}
 {{- define "opfs-share-backend.image" -}}
-{{- $tag := .Values.image.tag | default .Chart.AppVersion -}}
+{{- $tag := .Values.image.tag | default .Chart.AppVersion | default "latest" -}}
 {{- printf "%s:%s" .Values.image.repository $tag -}}
 {{- end -}}

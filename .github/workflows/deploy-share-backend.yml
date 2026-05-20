@@ -147,12 +147,42 @@ jobs:
           cat /tmp/rendered.yaml
           echo "::endgroup::"
 
-      - name: Read chart version
+      - name: Bump chart version + appVersion
         if: github.event_name != 'pull_request'
         id: chart
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+          SHA: ${{ github.sha }}
         run: |
-          version=$(awk '/^version:/ { print $2 }' "${CHART_PATH}/Chart.yaml")
+          # OCI Helm uses `Chart.yaml` `version` as the immutable
+          # registry tag, so we cannot publish a fixed `0.1.0` every
+          # push (registries either reject the second push or
+          # silently overwrite, breaking `targetRevision: 0.1.0`
+          # consumers).
+          #
+          # `version` becomes `${BASE}.${run_number}` — monotonic and
+          # unique per workflow run; `appVersion` becomes the short
+          # commit SHA, so the chart helper resolves the image tag
+          # to a real `:<short-sha>` that the build job pushed in
+          # this same run.
+          base=$(awk '/^version:/ { print $2 }' "${CHART_PATH}/Chart.yaml")
+          # Strip any pre-existing pre-release/build suffix; we want
+          # `MAJOR.MINOR` only as the base, then append run number.
+          base_majmin=$(echo "${base}" | awk -F. '{ print $1"."$2 }')
+          version="${base_majmin}.${RUN_NUMBER}"
+          app_version="${SHA:0:7}"
+
+          # Rewrite `Chart.yaml` in-place. `ubuntu-latest` ships GNU
+          # sed; the `-E` flag keeps the regex modern and the
+          # anchored `^…:` ensures we touch only the top-level keys.
+          sed -i -E "s|^version:.*$|version: ${version}|" "${CHART_PATH}/Chart.yaml"
+          sed -i -E "s|^appVersion:.*$|appVersion: \"${app_version}\"|" "${CHART_PATH}/Chart.yaml"
+
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "appVersion=${app_version}" >> "$GITHUB_OUTPUT"
+          echo "::group::Rewritten Chart.yaml"
+          cat "${CHART_PATH}/Chart.yaml"
+          echo "::endgroup::"
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'

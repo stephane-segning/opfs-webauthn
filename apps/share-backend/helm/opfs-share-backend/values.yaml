@@ -54,15 +54,15 @@ securityContext:
   runAsNonRoot: true
   readOnlyRootFilesystem: true
   allowPrivilegeEscalation: false
+  seccompProfile:
+    type: RuntimeDefault
   capabilities:
     drop:
       - ALL
 
-# Set to true and pass `cosign.publicKey` (or rely on cluster-side
-# `policy-controller`) when running in a production cluster. The
-# default keeps the chart usable on dev clusters that don't yet
-# have a Sigstore admission policy.
-verification:
-  enabled: false
-  cosign:
-    publicKey: ""
+# Note on signature verification: the chart deliberately does NOT
+# render any verification config into the pod. Sigstore enforcement
+# lives at admission time — install `policy-controller` (or kyverno-
+# sigstore) and apply a `ClusterImagePolicy` that matches the deploy
+# workflow's identity. The chart README and the ArgoCD example
+# document the exact identity strings to mirror.
