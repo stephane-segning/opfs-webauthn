@@ -73,45 +73,75 @@ function deserialize(raw: string): VaultCredential | null {
 }
 
 /**
+ * Distinguish "no OPFS in this environment" from other persistence
+ * failures so writes / deletes can fail loudly instead of pretending
+ * to have succeeded.
+ */
+export class CredentialStoreUnavailableError extends Error {
+	constructor() {
+		super(
+			"OPFS is not available in this context; the vault credential cannot be persisted",
+		);
+		this.name = "CredentialStoreUnavailableError";
+	}
+}
+
+/**
  * OPFS root accessor. `navigator.storage.getDirectory()` works in
  * main-thread context — only `createSyncAccessHandle` is restricted
  * to workers, and we don't need it here (the file is tiny and we
  * read/write it with the async stream APIs).
+ *
+ * Throws `CredentialStoreUnavailableError` if the API is missing or
+ * the root handle can't be obtained. Reads can recover from that
+ * (treat it as "no vault here"), but writes must propagate so the
+ * caller learns the credential didn't actually land on disk.
  */
-async function opfsRoot(): Promise<FileSystemDirectoryHandle | null> {
+async function opfsRoot(): Promise<FileSystemDirectoryHandle> {
 	if (typeof navigator === "undefined" || !navigator.storage?.getDirectory) {
-		return null;
+		throw new CredentialStoreUnavailableError();
 	}
 	try {
 		return await navigator.storage.getDirectory();
-	} catch {
-		return null;
+	} catch (err) {
+		const cause = err instanceof Error ? err : new Error(String(err));
+		const failure = new CredentialStoreUnavailableError();
+		(failure as { cause?: unknown }).cause = cause;
+		throw failure;
 	}
 }
 
+function isNotFoundError(err: unknown): boolean {
+	return err instanceof DOMException && err.name === "NotFoundError";
+}
+
 async function readVaultFile(): Promise<VaultCredential | null> {
-	const root = await opfsRoot();
-	if (!root) return null;
+	let root: FileSystemDirectoryHandle;
+	try {
+		root = await opfsRoot();
+	} catch (err) {
+		if (err instanceof CredentialStoreUnavailableError) {
+			// Treat "no OPFS" as "no vault" for reads — the caller will
+			// surface the `fresh` state and the next `set()` will throw
+			// loudly if the user actually tries to enroll.
+			return null;
+		}
+		throw err;
+	}
 	let fileHandle: FileSystemFileHandle;
 	try {
 		fileHandle = await root.getFileHandle(VAULT_FILE);
-	} catch {
-		// `NotFoundError` — no vault yet. Don't auto-create on read;
-		// `set()` is the only writer.
-		return null;
+	} catch (err) {
+		if (isNotFoundError(err)) return null;
+		throw err;
 	}
-	try {
-		const file = await fileHandle.getFile();
-		const text = await file.text();
-		return deserialize(text);
-	} catch {
-		return null;
-	}
+	const file = await fileHandle.getFile();
+	const text = await file.text();
+	return deserialize(text);
 }
 
 async function writeVaultFile(credential: VaultCredential): Promise<void> {
 	const root = await opfsRoot();
-	if (!root) return;
 	const fileHandle = await root.getFileHandle(VAULT_FILE, { create: true });
 	const writable = await fileHandle.createWritable();
 	try {
@@ -123,11 +153,15 @@ async function writeVaultFile(credential: VaultCredential): Promise<void> {
 
 async function deleteVaultFile(): Promise<void> {
 	const root = await opfsRoot();
-	if (!root) return;
 	try {
 		await root.removeEntry(VAULT_FILE);
-	} catch {
-		// `NotFoundError` is fine; idempotent clear.
+	} catch (err) {
+		// `NotFoundError` is fine; idempotent clear. Anything else
+		// (permission, lock, runtime quirk) is a real failure the UI
+		// needs to know about — otherwise `doForget` looks successful
+		// while the credential is still on disk.
+		if (isNotFoundError(err)) return;
+		throw err;
 	}
 }
 

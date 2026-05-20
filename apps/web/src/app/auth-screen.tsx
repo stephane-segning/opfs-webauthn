@@ -45,23 +45,35 @@ export function AuthScreen() {
 	const t = useTranslations();
 	const [state, setState] = useState<State>({ kind: "loading" });
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `t` is stable per locale change; bootstrap is mount-only by design.
 	useEffect(() => {
 		const support = detectSupport();
 		if (!support.webauthn) {
 			setState({ kind: "unsupported" });
 			return;
 		}
-		// Bootstrap is async because the store is OPFS-backed (with a
-		// one-time migration from the legacy `localStorage` home).
+		// Bootstrap is async because the store is OPFS-backed.
 		// `cancelled` guards against StrictMode's double-mount and
-		// unmount-during-read.
+		// unmount-during-read. The try/catch keeps the screen out
+		// of a stuck `loading` state if the store throws — codex
+		// caught that an unhandled rejection here would never reach
+		// `setState`, leaving the spinner up forever.
 		let cancelled = false;
 		void (async () => {
-			const stored = await credentialStore.get();
-			if (cancelled) return;
-			setState(
-				stored ? { kind: "locked", credential: stored } : { kind: "fresh" },
-			);
+			try {
+				const stored = await credentialStore.get();
+				if (cancelled) return;
+				setState(
+					stored ? { kind: "locked", credential: stored } : { kind: "fresh" },
+				);
+			} catch (err) {
+				if (cancelled) return;
+				setState({
+					kind: "error",
+					message: errorMessageFrom(err, t("auth.error.unknown")),
+					retry: () => setState({ kind: "fresh" }),
+				});
+			}
 		})();
 		return () => {
 			cancelled = true;
@@ -107,15 +119,24 @@ export function AuthScreen() {
 		setState({ kind: "locked", credential: state.credential });
 	}
 
-	function doForget() {
-		// Fire-and-forget — the store clear is async but the UI
-		// transition shouldn't wait on it. A failure to delete is
-		// logged but doesn't block the user from re-enrolling.
-		void credentialStore.clear().catch((err) => {
-			console.warn("opfs-auth: failed to clear vault credential", err);
-		});
+	async function doForget() {
+		// **Await** the clear before transitioning. Codex caught a
+		// race: if `doForget` returned synchronously and the user
+		// immediately tapped Enroll, the still-in-flight `clear()`
+		// could land *after* `enroll()`'s `set()` and erase the
+		// fresh credential. Serializing is the simple fix.
 		if (state.kind === "unlocked") state.vault.free();
-		setState({ kind: "fresh" });
+		setState({ kind: "busy", what: "enrolling" });
+		try {
+			await credentialStore.clear();
+			setState({ kind: "fresh" });
+		} catch (err) {
+			setState({
+				kind: "error",
+				message: errorMessageFrom(err, t("auth.error.unknown")),
+				retry: () => setState({ kind: "fresh" }),
+			});
+		}
 	}
 
 	if (state.kind === "unlocked") {

@@ -18,7 +18,10 @@
 
 export { enroll, unlock } from "./ceremony.js";
 export type { CredentialStore } from "./credential-store.js";
-export { credentialStore } from "./credential-store.js";
+export {
+	CredentialStoreUnavailableError,
+	credentialStore,
+} from "./credential-store.js";
 export type {
 	AuthFeatureSupport,
 	EnrollOptions,
