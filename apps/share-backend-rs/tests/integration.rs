@@ -4,6 +4,7 @@
 //! behavioural parity with the previous Cloudflare Worker.
 
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
@@ -14,13 +15,35 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 const ALLOWED_ORIGIN: &str = "http://test.local";
+/// Test-only header the synthetic clients use to identify
+/// themselves. Production sets `TRUSTED_IP_HEADER=x-real-ip` (or
+/// whatever the proxy provides); we use a dedicated name in tests so
+/// nobody confuses the test setup with a deployment value.
+const TEST_IP_HEADER: &str = "x-test-ip";
+const TEST_IP: &str = "203.0.113.7";
 
 fn make_state() -> (AppState, Arc<Mutex<u64>>) {
     let store = Arc::new(MemoryRendezvousStore::new());
-    let clock_inner = Arc::new(Mutex::new(1_700_000_000_u64));
+    // Seed the injectable clock at actual wall time so that the
+    // store's best-effort sweep (which uses `SystemTime::now()`)
+    // stays in sync with the handler's view of "now". An earlier
+    // version of these tests started at a fixed 2023 timestamp; that
+    // worked until the sweep started discriminating on absolute
+    // `expires_at`, at which point every freshly-inserted entry
+    // looked stale to the sweep and got evicted on the next write.
+    let base = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before epoch?")
+        .as_secs();
+    let clock_inner = Arc::new(Mutex::new(base));
     let clock_for_closure = Arc::clone(&clock_inner);
     let now = Arc::new(move || *clock_for_closure.lock().expect("clock"));
-    let state = AppState::with_clock(store, vec![ALLOWED_ORIGIN.to_owned()], now);
+    let state = AppState::with_clock(
+        store,
+        vec![ALLOWED_ORIGIN.to_owned()],
+        now,
+        Some(TEST_IP_HEADER.to_owned()),
+    );
     (state, clock_inner)
 }
 
@@ -28,17 +51,19 @@ fn advance_clock(clock: &Arc<Mutex<u64>>, seconds: u64) {
     *clock.lock().expect("clock") += seconds;
 }
 
-async fn send(
+async fn send_as(
     state: AppState,
     method: Method,
     uri: &str,
     body: Vec<u8>,
+    client_ip: &str,
 ) -> (StatusCode, axum::body::Bytes) {
     let router = build_router(state);
     let request = Request::builder()
         .method(method)
         .uri(uri)
         .header(header::ORIGIN, ALLOWED_ORIGIN)
+        .header(TEST_IP_HEADER, client_ip)
         .body(Body::from(body))
         .expect("request");
     let response = router.oneshot(request).await.expect("oneshot");
@@ -47,6 +72,15 @@ async fn send(
         .await
         .expect("body");
     (status, bytes)
+}
+
+async fn send(
+    state: AppState,
+    method: Method,
+    uri: &str,
+    body: Vec<u8>,
+) -> (StatusCode, axum::body::Bytes) {
+    send_as(state, method, uri, body, TEST_IP).await
 }
 
 async fn mint(state: AppState, epk_fill: u8) -> (StatusCode, Value) {
@@ -159,6 +193,25 @@ async fn expired_rendezvous_returns_410_gone() {
 }
 
 #[tokio::test]
+async fn expired_blob_is_not_served_even_if_sweep_lags() {
+    // Codex's P2 concern: a blob whose `expires_at` has passed
+    // shouldn't be served just because the background sweep didn't
+    // run. We exercise that explicitly here — the handler's clock
+    // is what gates the read.
+    let (state, clock) = make_state();
+    let (_, json) = mint(state.clone(), 6).await;
+    let code = json["code"].as_str().unwrap().to_owned();
+    let url = format!("/rendezvous/{code}/blob");
+
+    let (status, _) = send(state.clone(), Method::POST, &url, vec![1, 2, 3]).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    advance_clock(&clock, 301);
+    let (status, _) = send(state, Method::GET, &url, vec![]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn rate_limits_after_the_mint_cap() {
     let (state, _clock) = make_state();
     for fill in 10..20 {
@@ -167,6 +220,44 @@ async fn rate_limits_after_the_mint_cap() {
     }
     let (blocked, _) = mint(state, 200).await;
     assert_eq!(blocked, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn xforwarded_for_does_not_bypass_per_ip_rate_limit() {
+    // Codex caught that reading X-Forwarded-For's first hop lets the
+    // client rotate spoofed IPs to evade the per-IP cap. With the
+    // trusted-header-only contract, every request that doesn't set
+    // the configured header lands in a shared `"unknown"` bucket.
+    // Build a router that *isn't* configured with the test header
+    // (and DOESN'T send it) to exercise that path.
+    async fn forge(state: AppState, fill: u8, spoofed_xff: &str) -> StatusCode {
+        let router = build_router(state);
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/rendezvous")
+            .header(header::ORIGIN, ALLOWED_ORIGIN)
+            .header("x-forwarded-for", spoofed_xff)
+            .body(Body::from(vec![fill; 32]))
+            .expect("request");
+        router.oneshot(request).await.expect("oneshot").status()
+    }
+
+    let store = Arc::new(MemoryRendezvousStore::new());
+    let base = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("epoch")
+        .as_secs();
+    let now: Arc<dyn Fn() -> u64 + Send + Sync> = Arc::new(move || base);
+    let state = AppState::with_clock(store, vec![ALLOWED_ORIGIN.to_owned()], now, None);
+
+    for fill in 10..20 {
+        let status = forge(state.clone(), fill, &format!("198.51.100.{fill}")).await;
+        assert_eq!(status, StatusCode::OK, "mint {fill} should succeed");
+    }
+    // 11th attempt rotates the spoofed XFF again; without the
+    // trusted-header gate this used to slip past the cap.
+    let status = forge(state, 200, "198.51.100.99").await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]

@@ -49,10 +49,12 @@ pub async fn cors_layer(
     }
 
     let mut response = next.run(request).await;
+    // Once we reach this point the origin has already passed the
+    // pre-handler gate above, so the second `origin_is_allowed`
+    // call gemini flagged would be redundant. Just apply the
+    // headers when the origin is present.
     if let Some(o) = origin {
-        if origin_is_allowed(&o, &state.allowed_origins) {
-            apply_cors_headers(response.headers_mut(), &o);
-        }
+        apply_cors_headers(response.headers_mut(), &o);
     }
     response
 }
@@ -69,8 +71,9 @@ fn preflight_response(origin: Option<&str>, allowed: &[String]) -> Response {
         .body(axum::body::Body::empty())
         .expect("static body");
     if ok {
-        // `origin` is Some-and-allowed inside this branch.
-        apply_cors_headers(response.headers_mut(), origin.unwrap_or(""));
+        // `ok` implies `origin.is_some_and(...)`, so the unwrap is
+        // proven by the branch condition.
+        apply_cors_headers(response.headers_mut(), origin.expect("ok ⇒ Some"));
     }
     response
 }

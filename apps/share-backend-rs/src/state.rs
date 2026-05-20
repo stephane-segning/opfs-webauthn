@@ -24,6 +24,14 @@ pub struct AppState {
     pub store: SharedStore,
     pub allowed_origins: Arc<Vec<String>>,
     pub now: Clock,
+    /// Lowercase HTTP header name the proxy uses to communicate the
+    /// real client IP (e.g. `x-real-ip` behind nginx-ingress,
+    /// `cf-connecting-ip` behind Cloudflare). When `None` the rate
+    /// limiter degrades to a global "unknown" bucket — best-effort,
+    /// per ADR 0011. **Never** read `X-Forwarded-For` directly:
+    /// codex's review on PR #26 caught that taking the first hop is
+    /// client-controllable and trivially spoofs the rate limit.
+    pub trusted_ip_header: Arc<Option<String>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -32,25 +40,39 @@ impl std::fmt::Debug for AppState {
             .field("store", &self.store)
             .field("allowed_origins", &self.allowed_origins)
             .field("now", &"<fn>")
+            .field("trusted_ip_header", &self.trusted_ip_header)
             .finish()
     }
 }
 
 impl AppState {
-    pub fn new(store: SharedStore, allowed_origins: Vec<String>) -> Self {
+    pub fn new(
+        store: SharedStore,
+        allowed_origins: Vec<String>,
+        trusted_ip_header: Option<String>,
+    ) -> Self {
         Self {
             store,
             allowed_origins: Arc::new(allowed_origins),
             now: system_clock(),
+            trusted_ip_header: Arc::new(trusted_ip_header.map(|h| h.to_ascii_lowercase())),
         }
     }
 
-    /// Test constructor — inject a deterministic clock.
-    pub fn with_clock(store: SharedStore, allowed_origins: Vec<String>, now: Clock) -> Self {
+    /// Test constructor — inject a deterministic clock and an
+    /// explicit trusted-header name so the rate-limit test can hand
+    /// each synthetic client a distinct IP.
+    pub fn with_clock(
+        store: SharedStore,
+        allowed_origins: Vec<String>,
+        now: Clock,
+        trusted_ip_header: Option<String>,
+    ) -> Self {
         Self {
             store,
             allowed_origins: Arc::new(allowed_origins),
             now,
+            trusted_ip_header: Arc::new(trusted_ip_header.map(|h| h.to_ascii_lowercase())),
         }
     }
 }

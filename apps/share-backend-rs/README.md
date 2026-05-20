@@ -45,27 +45,30 @@ curl -v -X POST http://127.0.0.1:8080/rendezvous \
 cargo test -p opfs-share-backend
 ```
 
-10 integration tests drive the router through `tower::ServiceExt::oneshot`
+12 integration tests drive the router through `tower::ServiceExt::oneshot`
 against a real `MemoryRendezvousStore` and an injected clock — happy
-path, single-pickup, TTL expiry → 410, payload cap → 413, per-IP rate
-limit → 429, CORS preflight/rejection. The commitment-derivation
-test vector lives in `crates/crypto`; both the wasm and the
-server consume it directly, so there's no JS↔Rust drift to guard
-against any more.
+path, single-pickup, TTL expiry → 410, expired-blob → 404 even if the
+sweep lags, payload cap → 413, per-IP rate limit → 429, an explicit
+"`X-Forwarded-For` spoofing does NOT bypass the per-IP cap" case,
+and CORS preflight/rejection. The commitment-derivation test vector
+lives in `crates/crypto`; both the wasm and the server consume it
+directly, so there's no JS↔Rust drift to guard against any more.
 
 ## Deploy
 
-The production service is served at **`https://ocs.vaam.store`**
-(Knative + custom DNS). The frontend (still on GitHub Pages at
-`https://stephane-segning.github.io/opfs-webauthn/`) talks to it
-via the `NEXT_PUBLIC_SHARE_BACKEND_URL` build-time variable.
+The frontend lives at **`https://ocs.vaam.store`** (GitHub Pages
++ custom DNS); the backend will be served at
+**`https://api.ocs.vaam.store`** (Knative). The page-side client
+finds it via the `NEXT_PUBLIC_SHARE_BACKEND_URL` build-time
+variable.
 
 Repo-level config that needs setting once:
 
 | Where | Name | Value |
 | --- | --- | --- |
-| Repository variable (Pages build) | `NEXT_PUBLIC_SHARE_BACKEND_URL` | `https://ocs.vaam.store` |
-| Knative manifest / Deployment env | `ALLOWED_ORIGINS` | `https://stephane-segning.github.io` (comma-separated for additional origins) |
+| Repository variable (Pages build) | `NEXT_PUBLIC_SHARE_BACKEND_URL` | `https://api.ocs.vaam.store` |
+| Knative manifest / Deployment env | `ALLOWED_ORIGINS` | `https://ocs.vaam.store` (comma-separated for additional origins) |
+| Knative manifest / Deployment env | `TRUSTED_IP_HEADER` | `x-real-ip` — required for per-IP rate limiting. Without it the limiter degrades to a single global bucket. We never read `X-Forwarded-For` directly (client-controllable first hop). |
 | Knative manifest / Deployment env | `PORT` | `8080` (default, matches the binary) |
 
 Manifests + CI workflow land in the follow-up PR. The shape will be:

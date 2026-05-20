@@ -2,8 +2,6 @@
 //! Result<Response, AppError>` so we can drive them through
 //! `Router::oneshot` in tests without binding a real socket.
 
-use std::cmp::max;
-
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -19,49 +17,38 @@ use crate::store::RendezvousRecord;
 /// X25519 public-key length in bytes (mirrors `opfs_crypto::share`).
 const X25519_PUBKEY_LEN: usize = 32;
 const APP_OCTET_STREAM: &str = "application/octet-stream";
+/// Returned when `trusted_ip_header` isn't set or the header is
+/// missing on the request. Every request that lands in this bucket
+/// shares one rate-limit counter — explicit fail-closed.
+const UNKNOWN_CLIENT_BUCKET: &str = "unknown";
 
-/// Resolve the client IP from the proxy-set headers.
+/// Resolve the client IP from a proxy-set header that the operator
+/// has explicitly named trusted (`TRUSTED_IP_HEADER`, lowercased and
+/// stored on `AppState`).
 ///
-/// `X-Forwarded-For` (Knative's ingress sets this) is preferred,
-/// with `Forwarded` (RFC 7239) as a fallback, and a placeholder
-/// when neither is present. Pure-string parse — no DNS, no
-/// allocation in the common case.
-pub fn client_ip(headers: &HeaderMap) -> String {
-    if let Some(value) = headers.get("x-forwarded-for") {
-        if let Ok(s) = value.to_str() {
-            // First entry in the comma-separated list is the real
-            // client; the rest are intermediate proxies (Knative,
-            // ingress, …) that appended themselves.
-            if let Some(first) = s.split(',').next() {
-                let trimmed = first.trim();
-                if !trimmed.is_empty() {
-                    return trimmed.to_owned();
-                }
-            }
-        }
-    }
-    if let Some(value) = headers.get("forwarded") {
-        if let Ok(s) = value.to_str() {
-            // RFC 7239: look for `for="…";` token.
-            for token in s.split(';') {
-                let token = token.trim();
-                if let Some(rest) = token.strip_prefix("for=") {
-                    let rest = rest.trim_matches(|c| c == '"');
-                    if !rest.is_empty() {
-                        return rest.to_owned();
-                    }
-                }
-            }
-        }
-    }
-    "0.0.0.0".to_owned()
-}
-
-/// Clamp a derived TTL to at least one second so callers never hand
-/// a zero-or-negative TTL into the store. The store would otherwise
-/// be free to evict the record on the spot.
-fn remaining_ttl(expires_at: u64, now: u64) -> u64 {
-    max(1, expires_at.saturating_sub(now))
+/// We **only** consult that header — never `X-Forwarded-For`'s first
+/// hop, which is client-controllable. Codex caught that the
+/// previous XFF-first-hop reader let an attacker spoof `Origin`-IP
+/// values and rotate around the per-IP mint cap; this contract
+/// closes that hole by requiring the deployment to declare which
+/// header it trusts (nginx-ingress: `x-real-ip`, Cloudflare:
+/// `cf-connecting-ip`, etc.).
+///
+/// When the header isn't configured or isn't present on the
+/// request, every caller falls into a single shared bucket. The
+/// rate limit becomes global rather than per-IP — strictly tighter,
+/// not looser, and the documented best-effort posture (ADR 0011)
+/// still holds.
+pub fn client_ip(headers: &HeaderMap, state: &AppState) -> String {
+    let Some(header_name) = state.trusted_ip_header.as_deref() else {
+        return UNKNOWN_CLIENT_BUCKET.to_owned();
+    };
+    headers
+        .get(header_name)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map_or_else(|| UNKNOWN_CLIENT_BUCKET.to_owned(), str::to_owned)
 }
 
 fn read_capped_body(body: Bytes, max: usize) -> Result<Bytes, AppError> {
@@ -96,7 +83,7 @@ pub async fn mint_rendezvous(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, AppError> {
-    let ip = client_ip(&headers);
+    let ip = client_ip(&headers, &state);
     let minted = state
         .store
         .increment_mint_counter(&ip, RENDEZVOUS_TTL_SECONDS);
@@ -119,7 +106,6 @@ pub async fn mint_rendezvous(
             epk: epk_bytes,
             expires_at,
         },
-        RENDEZVOUS_TTL_SECONDS,
     );
     if !ok {
         return Err(AppError::Conflict("code collision; retry".into()));
@@ -166,9 +152,11 @@ pub async fn upload_blob(
     if blob.is_empty() {
         return Err(AppError::BadRequest("empty blob".into()));
     }
-    let ok = state
-        .store
-        .put_blob(&code, blob.to_vec(), remaining_ttl(record.expires_at, now));
+    // Blob expiry == the rendezvous expiry, clamped to "at least
+    // one second from now" so a sub-second-late upload still lands
+    // briefly. Beyond that the rendezvous itself is gone.
+    let blob_expires_at = record.expires_at.max(now.saturating_add(1));
+    let ok = state.store.put_blob(&code, blob.to_vec(), blob_expires_at);
     if !ok {
         return Err(AppError::Conflict("blob already uploaded".into()));
     }
@@ -181,9 +169,10 @@ pub async fn download_blob(
     Path(code): Path<String>,
 ) -> Result<Response, AppError> {
     assert_code(&code)?;
+    let now = (state.now)();
     let blob = state
         .store
-        .take_blob(&code)
+        .take_blob(&code, now)
         .ok_or_else(|| AppError::NotFound("blob unavailable".into()))?;
     Ok(octet_stream_response(blob))
 }

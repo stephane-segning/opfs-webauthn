@@ -36,11 +36,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(DEFAULT_PORT);
     let host = env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_owned());
     let allowed = parse_allowed_origins(env::var("ALLOWED_ORIGINS").ok());
+    // Which header carries the trusted client IP. Examples:
+    //   nginx-ingress: `x-real-ip`
+    //   Cloudflare:    `cf-connecting-ip`
+    //   Knative+Istio: `x-real-ip` (Envoy sets it from the immediate peer)
+    // When unset the rate limiter degrades to a single global
+    // bucket — we never read `X-Forwarded-For` directly because
+    // the first hop is client-controllable.
+    let trusted_ip_header = env::var("TRUSTED_IP_HEADER").ok().filter(|h| !h.is_empty());
 
-    tracing::info!(?host, port, ?allowed, "starting opfs-share-backend");
+    tracing::info!(
+        ?host,
+        port,
+        ?allowed,
+        ?trusted_ip_header,
+        "starting opfs-share-backend",
+    );
 
     let store = Arc::new(MemoryRendezvousStore::new());
-    let state = AppState::new(store, allowed);
+    let state = AppState::new(store, allowed, trusted_ip_header);
     let app = build_router(state);
 
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
