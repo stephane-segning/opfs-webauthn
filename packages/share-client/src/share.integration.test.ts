@@ -120,11 +120,12 @@ describe("share flow — full integration (real WASM + real backend)", () => {
 		}
 	});
 
-	it("rejects a second pickup of the same blob", async () => {
+	it("deletes the blob after the first successful pickup (same code)", async () => {
 		const client = makeInProcessClient();
 		const session = await prepareReceive(client);
+		const code = session.code;
 		const plaintext = payloadFor("single-shot", "");
-		await sendShare(client, session.code, plaintext);
+		await sendShare(client, code, plaintext);
 
 		const first = await pollAndDecrypt(client, session, {
 			intervalMs: 5,
@@ -132,15 +133,14 @@ describe("share flow — full integration (real WASM + real backend)", () => {
 		});
 		expect(first).toEqual(plaintext);
 
-		// `pollAndDecrypt` freed the handle on its way out, so the
-		// "second pickup" is a fresh attempt without a valid handle.
-		// We expect the backend's `takeBlob` to have deleted the
-		// ciphertext, so a follow-up `tryDownloadBlob` returns null —
-		// i.e. the timeout path fires.
-		const second = makeInProcessClient(); // fresh store, fresh keys
-		const fresh = await prepareReceive(second);
-		await expect(
-			pollAndDecrypt(second, fresh, { intervalMs: 5, timeoutMs: 50 }),
-		).rejects.toMatchObject({ kind: "rendezvousExpired" });
+		// Bypass `pollAndDecrypt` (which would re-mint a handle and
+		// loop on a missing blob until timeout) — hit the same code
+		// directly. The backend's `takeBlob` must have deleted the
+		// ciphertext on the first read, so this returns `null`. That
+		// is the load-bearing single-pickup contract; testing it via
+		// a fresh rendezvous code would not actually exercise the
+		// blob-delete path on the original.
+		const replay = await client.tryDownloadBlob(code);
+		expect(replay).toBeNull();
 	});
 });
