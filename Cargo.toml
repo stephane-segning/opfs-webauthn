@@ -5,7 +5,7 @@ members = [
     "crates/repo",
     "crates/share-protocol",
     "crates/core",
-    "apps/share-backend-rs",
+    "apps/share-backend",
 ]
 
 [workspace.package]

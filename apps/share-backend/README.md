@@ -1,100 +1,105 @@
-# @opfs/share-backend
+# opfs-share-backend (Rust)
 
-Cloudflare Worker that backs the recipient-first cross-device share
-flow (ADR 0007). It mediates a short-lived rendezvous keyed by a
-BLAKE3-truncated commitment of the recipient's ephemeral X25519 public
-key, then ferries a single AEAD-encrypted blob from sender to
-recipient. **The Worker never sees plaintext, DEKs, or PRF output —
-every body it stores is opaque ciphertext.**
+Self-hosted Rust HTTP backend for the recipient-first share rendezvous
+([ADR 0012](../../docs/adrs/0012-self-hosted-rust-share-backend.md)).
+Replaces the Cloudflare Worker that used to live in `apps/share-backend/`;
+the HTTP contract is identical so the page-side `@opfs/share-client`
+needs no changes beyond pointing `NEXT_PUBLIC_SHARE_BACKEND_URL` at
+the new deploy.
 
 ## Endpoints
 
 | Method + Path | Purpose |
 | --- | --- |
 | `POST /rendezvous` | Recipient mints a rendezvous. Body: raw 32-byte X25519 pubkey. Response: `{code, expiresAt}` JSON. |
-| `GET /rendezvous/:code` | Sender fetches the recipient's pubkey (raw bytes). **Sender MUST locally re-derive the code from the returned pubkey before encrypting.** |
-| `POST /rendezvous/:code/blob` | Sender uploads the encrypted share blob (single-shot). |
-| `GET /rendezvous/:code/blob` | Recipient picks up the blob exactly once; the Worker deletes after first read. |
+| `GET /rendezvous/:code` | Sender fetches the recipient's pubkey (raw bytes). The sender must locally re-derive the code from the returned pubkey before encrypting. |
+| `POST /rendezvous/:code/blob` | Sender uploads the encrypted share blob (single-shot, atomic at the `Mutex` boundary). |
+| `GET /rendezvous/:code/blob` | Recipient picks up the blob exactly once; the server deletes after the first successful read. |
 
-Requests with an `Origin` header that isn't on the
-`ALLOWED_ORIGINS` allow-list are rejected with `403` before any
-route runs — simple cross-origin `POST`s bypass preflight, so the
-allow-list has to be enforced server-side. Preflight `OPTIONS`
-responses are `204` on allowed origins, `403` otherwise. Requests
-without an `Origin` header (curl, server-to-server) are accepted.
+All non-`OPTIONS` requests are CORS-checked against `ALLOWED_ORIGINS`
+before any handler runs. Rate limit: `MINT_RATE_LIMIT` mints per IP
+per TTL window (currently 10 per 5 min); hard enforcement against
+brute-force / DoS is configured at the ingress / k8s
+`NetworkPolicy` layer.
 
-Rate limiting in code is best-effort: `MINT_RATE_LIMIT` per IP per
-TTL window (currently 10 per 5 min), implemented over KV. Hard
-enforcement against brute force and DoS is configured at the
-Cloudflare zone level via WAF Rate Limiting Rules; the real
-brute-force barrier is the 60-bit commitment, not this counter.
-
-## Storage
-
-- **KV `RENDEZVOUS`** — small metadata records keyed by code
-  (`{epk, expiresAt}`) plus the per-IP mint counter. KV's eventual
-  consistency is fine here: codes are derived from epks, so the
-  worst case is a slightly stale record well within the 5-minute TTL.
-- **R2 `BLOBS`** — opaque ciphertext, one object per code. We use
-  R2's conditional put (`onlyIf: { etagDoesNotMatch: "*" }`) so two
-  senders racing to upload under the same code see exactly one
-  success — KV cannot give us that atomicity.
-
-## Deploy
-
-### One-time setup
+## Run locally
 
 ```sh
-# Create the KV namespace + R2 bucket on Cloudflare.
-pnpm wrangler kv namespace create RENDEZVOUS   # paste the id into wrangler.jsonc
-pnpm wrangler r2 bucket create opfs-share-blobs
-
-# Lock down the allow-list to your real frontend origin(s) in
-# wrangler.jsonc `vars.ALLOWED_ORIGINS`.
+PORT=8080 \
+HOST=127.0.0.1 \
+ALLOWED_ORIGINS=http://localhost:3000 \
+cargo run -p opfs-share-backend
 ```
 
-### Manual deploy
+Then in another shell:
 
 ```sh
-pnpm --filter @opfs/share-backend deploy
-```
-
-### CI deploy (recommended)
-
-`.github/workflows/deploy-share-backend.yml` runs `wrangler deploy`
-on every push to `main` that touches `apps/share-backend/**`, and on
-manual `workflow_dispatch`. It requires two repository-level secrets
-/ variables:
-
-1. **`CLOUDFLARE_API_TOKEN`** (repository **secret**) — a Cloudflare
-   API token scoped for Workers Scripts, KV, and R2.
-2. **`CLOUDFLARE_ACCOUNT_ID`** (repository **variable**) — the
-   account id wrangler should publish under.
-
-Once those are set, the next push to `main` deploys the Worker.
-After the first deploy, set **`NEXT_PUBLIC_SHARE_BACKEND_URL`** as a
-repository **variable** to the published `.workers.dev` (or custom)
-URL — the GitHub Pages workflow reads that variable and threads it
-into the static build so the share UI lights up in production.
-
-When `CLOUDFLARE_API_TOKEN` is unset, the deploy workflow short-circuits
-with a notice rather than failing — forks without Cloudflare access
-still get green CI.
-
-Local development:
-
-```sh
-pnpm --filter @opfs/share-backend dev
-# → http://127.0.0.1:8787
+curl -v -X POST http://127.0.0.1:8080/rendezvous \
+  --data-binary @<(printf '%0.s\xAA' $(seq 32)) \
+  -H 'origin: http://localhost:3000'
 ```
 
 ## Tests
 
 ```sh
-pnpm --filter @opfs/share-backend test
+cargo test -p opfs-share-backend
 ```
 
-The commitment test pins a Rust reference vector
-(`FA31QBAS6ZFG` for `epk = [9; 32]`); if the JS port ever drifts from
-`crates/crypto/src/commitment.rs`, that test fails immediately and
-the share flow is held safe.
+12 integration tests drive the router through `tower::ServiceExt::oneshot`
+against a real `MemoryRendezvousStore` and an injected clock — happy
+path, single-pickup, TTL expiry → 410, expired-blob → 404 even if the
+sweep lags, payload cap → 413, per-IP rate limit → 429, an explicit
+"`X-Forwarded-For` spoofing does NOT bypass the per-IP cap" case,
+and CORS preflight/rejection. The commitment-derivation test vector
+lives in `crates/crypto`; both the wasm and the server consume it
+directly, so there's no JS↔Rust drift to guard against any more.
+
+## Deploy
+
+The frontend lives at **`https://ocs.vaam.store`** (GitHub Pages
++ custom DNS); the backend will be served at
+**`https://api.ocs.vaam.store`** (Knative). The page-side client
+finds it via the `NEXT_PUBLIC_SHARE_BACKEND_URL` build-time
+variable.
+
+Repo-level config that needs setting once:
+
+| Where | Name | Value |
+| --- | --- | --- |
+| Repository variable (Pages build) | `NEXT_PUBLIC_SHARE_BACKEND_URL` | `https://api.ocs.vaam.store` |
+| Knative manifest / Deployment env | `ALLOWED_ORIGINS` | `https://ocs.vaam.store` (comma-separated for additional origins) |
+| Knative manifest / Deployment env | `TRUSTED_IP_HEADER` | `x-real-ip` — required for per-IP rate limiting. Without it the limiter degrades to a single global bucket. We never read `X-Forwarded-For` directly (client-controllable first hop). |
+| Knative manifest / Deployment env | `PORT` | `8080` (default, matches the binary) |
+
+Manifests + CI workflow live in:
+
+- `Dockerfile` — multi-stage build, distroless
+  `cc-debian12:nonroot` runtime (~50 MiB; the `cc` flavor bundles
+  libssl/libcrypto). Layer caching delegated to the workflow's
+  buildx GHA cache instead of `cargo-chef`, which has an MSRV
+  conflict with our pinned 1.85 toolchain.
+- `k8s/service.yaml` — Knative `Service` with
+  `containerConcurrency: 100`, `maxScale: 1` (single replica so
+  the in-memory store stays correct), a read-only root filesystem,
+  and conservative resource requests.
+- `.github/workflows/deploy-share-backend.yml` — on push to
+  `main` touching `apps/share-backend/**`, `crates/crypto/**`,
+  or `Cargo.toml/lock`: builds + pushes the image to GHCR, applies
+  the manifest, and `kubectl wait`s for `Ready=True`. Skips
+  gracefully when `KUBE_CONFIG` isn't set so fork CI stays green.
+
+Secrets / variables the workflow expects:
+
+- `KUBE_CONFIG` (**secret**) — `base64 -w0` of a kubeconfig with
+  permission to manage the `serving.knative.dev/v1` `Service` in
+  the target namespace.
+- `KNATIVE_NAMESPACE` (**variable**, optional) — namespace to
+  deploy into. Defaults to `default`. Applied via `kubectl -n`;
+  the manifest itself omits `metadata.namespace` so it ports
+  cleanly across environments.
+- `ALLOWED_ORIGINS` (**variable**, optional) — comma-separated
+  CORS allow-list substituted into the manifest at deploy time.
+  Defaults to `https://ocs.vaam.store`.
+
+The image is published at `ghcr.io/<owner>/opfs-share-backend`,
+tagged `:latest` and `:<git-sha>`.

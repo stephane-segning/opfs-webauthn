@@ -1,92 +1,133 @@
 name: Deploy share backend
 
-# Deploys the Cloudflare Worker that brokers the recipient-first
-# share rendezvous (ADR 0007). Two trigger paths:
-#   - automatic on `main` when files under apps/share-backend change
-#   - manual (`workflow_dispatch`) for re-deploys after secret rotations
+# Builds the Rust rendezvous backend container, pushes it to GHCR,
+# and applies the Knative `Service` manifest (ADR 0012).
 #
 # Repository setup (one-time):
-#   1. Create a Cloudflare API token with permissions for Workers
-#      Scripts, KV, and R2; add it as the `CLOUDFLARE_API_TOKEN`
-#      secret on this repo.
-#   2. Set `CLOUDFLARE_ACCOUNT_ID` as a repository variable
-#      (or a secret if you prefer — wrangler reads it either way).
-#   3. Run `wrangler kv namespace create RENDEZVOUS` and
-#      `wrangler r2 bucket create opfs-share-blobs` once, then paste
-#      the returned KV namespace id into `apps/share-backend/wrangler.jsonc`.
+#   1. Grant the workflow `packages: write` so it can publish to
+#      GHCR — done in `permissions:` below.
+#   2. Add `KUBE_CONFIG` as a repository secret: base64-encoded
+#      kubeconfig with permission to manage the
+#      `serving.knative.dev/v1` `Service` in the target namespace.
+#      `cat ~/.kube/config | base64 -w0`.
+#   3. (Optional) `KNATIVE_NAMESPACE` as a repository variable; the
+#      manifest defaults to `default`.
 #
-# If `CLOUDFLARE_API_TOKEN` is unset the workflow short-circuits with a
-# notice rather than failing — that keeps fork CI green for contributors
-# who don't have Cloudflare access.
+# When `KUBE_CONFIG` is unset the workflow short-circuits with a
+# notice rather than failing — keeps fork CI green.
 
 on:
   push:
     branches: [main]
     paths:
       - "apps/share-backend/**"
+      - "crates/crypto/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/deploy-share-backend.yml"
-      # Dependency-only commits (e.g. a wrangler patch) bump the
-      # lockfile without touching `apps/share-backend/**`; we still
-      # want those landing in production.
-      - "pnpm-lock.yaml"
   workflow_dispatch:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: deploy-share-backend
   cancel-in-progress: false
 
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/opfs-share-backend
+
 jobs:
   deploy:
-    name: wrangler deploy
+    name: build → push → apply
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check Cloudflare credentials
+      - name: Check deploy credentials
         id: creds
         run: |
-          if [ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
-            echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping Worker deploy."
+          if [ -z "${{ secrets.KUBE_CONFIG }}" ]; then
+            echo "::notice::KUBE_CONFIG not set — skipping Knative deploy."
             echo "ready=false" >> "$GITHUB_OUTPUT"
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Set up pnpm
+      - name: Set up Docker Buildx
         if: steps.creds.outputs.ready == 'true'
-        uses: pnpm/action-setup@v4
+        uses: docker/setup-buildx-action@v3
 
-      - name: Set up Node 20
+      - name: Log in to GHCR
         if: steps.creds.outputs.ready == 'true'
-        uses: actions/setup-node@v4
+        uses: docker/login-action@v3
         with:
-          node-version: 20
-          cache: pnpm
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install
+      - name: Build + push image
         if: steps.creds.outputs.ready == 'true'
-        run: pnpm install --frozen-lockfile
-
-      - name: Typecheck + test
-        if: steps.creds.outputs.ready == 'true'
-        run: pnpm --filter @opfs/share-backend test && pnpm --filter @opfs/share-backend typecheck
-
-      - name: Deploy via wrangler
-        if: steps.creds.outputs.ready == 'true'
-        uses: cloudflare/wrangler-action@v3
+        uses: docker/build-push-action@v6
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          # Read the account id from either the repository variable or
-          # the secret, depending on how the owner classified it. The
-          # README mentions both — this expression makes the workflow
-          # honor that flexibility instead of silently breaking when
-          # the id lives in `secrets`.
-          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: apps/share-backend
-          # `wrangler deploy` reads bindings from wrangler.jsonc and
-          # publishes the Worker. ALLOWED_ORIGINS lives in vars there
-          # too; rotate via `wrangler.jsonc` + a re-deploy.
-          command: deploy
+          context: .
+          file: apps/share-backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install kubectl
+        if: steps.creds.outputs.ready == 'true'
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubeconfig
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          printf '%s' "$KUBE_CONFIG" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Render manifest with the just-pushed tag
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          IMAGE: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          # CORS allow-list. Defaults to the production UI host;
+          # override per repo (or per environment) via the
+          # `ALLOWED_ORIGINS` repository variable.
+          ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS || 'https://ocs.vaam.store' }}
+        run: |
+          # `envsubst` would also work; sed keeps the toolchain to
+          # what `azure/setup-kubectl` already provisions.
+          sed \
+            -e "s|\${IMAGE}|${IMAGE}|g" \
+            -e "s|\${ALLOWED_ORIGINS}|${ALLOWED_ORIGINS}|g" \
+            apps/share-backend/k8s/service.yaml > /tmp/service.rendered.yaml
+          echo "::group::Rendered manifest"
+          cat /tmp/service.rendered.yaml
+          echo "::endgroup::"
+
+      - name: Apply Knative Service
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          NAMESPACE: ${{ vars.KNATIVE_NAMESPACE || 'default' }}
+        run: kubectl apply -n "${NAMESPACE}" -f /tmp/service.rendered.yaml
+
+      - name: Wait for rollout
+        if: steps.creds.outputs.ready == 'true'
+        env:
+          NAMESPACE: ${{ vars.KNATIVE_NAMESPACE || 'default' }}
+        run: |
+          # Block until Knative reports `Ready=True`. Surfaces image
+          # pull / config errors as a workflow failure instead of
+          # leaving the job green while the service stays broken.
+          kubectl wait \
+            --namespace "${NAMESPACE}" \
+            --for=condition=Ready \
+            --timeout=180s \
+            ksvc/opfs-share-backend

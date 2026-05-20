@@ -24,7 +24,7 @@ choice in this repo.
 .
 ├── apps/
 │   ├── web/                 Next.js app (static-exported to GitHub Pages)
-│   └── share-backend/       Cloudflare Worker rendezvous (ADR 0007)
+│   └── share-backend/       Rust + Knative rendezvous service (ADR 0012)
 ├── packages/                JS/TS workspace packages (ADR 0010)
 │   ├── auth/                WebAuthn PRF ceremonies
 │   ├── core-wasm/           wasm-bindgen surface over the Rust crates
@@ -63,7 +63,7 @@ pnpm --filter @opfs/web dev
   (ADR 0006).
 - **Crypto + repo**: Rust → WASM, AES-256-GCM rows, HKDF-derived KEK
   from WebAuthn PRF (ADR 0005).
-- **Sharing**: Cloudflare Workers rendezvous with a BLAKE3-commitment
+- **Sharing**: Rust + Knative rendezvous service with a BLAKE3-commitment
   pickup code (ADR 0007).
 
 ## License

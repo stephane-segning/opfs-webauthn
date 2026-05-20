@@ -36,7 +36,7 @@ deployed on Kubernetes via Knative.
 
 ### Stack
 
-- **`apps/share-backend-rs/`** — Rust binary using `axum` on
+- **`apps/share-backend/`** — Rust binary using `axum` on
   `tokio`. Same HTTP contract as the existing Worker
   (`POST /rendezvous`, `GET /rendezvous/:code`,
   `POST /rendezvous/:code/blob`, `GET /rendezvous/:code/blob`),
