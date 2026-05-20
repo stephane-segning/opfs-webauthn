@@ -34,6 +34,10 @@ RUN wasm-pack build crates/core \
 # ─── stage 2: build the Next.js static export ─────────────────
 FROM node:${NODE_VERSION}-bookworm AS frontend
 ARG PNPM_VERSION
+# `CI=true` makes pnpm non-interactive — without it the install
+# step aborts with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`
+# when it wants to clean a stale `node_modules` directory.
+ENV CI=true
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 COPY . .
