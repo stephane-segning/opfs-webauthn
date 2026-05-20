@@ -55,8 +55,20 @@ against any more.
 
 ## Deploy
 
-Manifests + CI workflow land in the follow-up PR. The shape will
-be:
+The production service is served at **`https://ocs.vaam.store`**
+(Knative + custom DNS). The frontend (still on GitHub Pages at
+`https://stephane-segning.github.io/opfs-webauthn/`) talks to it
+via the `NEXT_PUBLIC_SHARE_BACKEND_URL` build-time variable.
+
+Repo-level config that needs setting once:
+
+| Where | Name | Value |
+| --- | --- | --- |
+| Repository variable (Pages build) | `NEXT_PUBLIC_SHARE_BACKEND_URL` | `https://ocs.vaam.store` |
+| Knative manifest / Deployment env | `ALLOWED_ORIGINS` | `https://stephane-segning.github.io` (comma-separated for additional origins) |
+| Knative manifest / Deployment env | `PORT` | `8080` (default, matches the binary) |
+
+Manifests + CI workflow land in the follow-up PR. The shape will be:
 
 - Multi-stage Dockerfile (`cargo-chef` for layer caching, distroless
   `cc` runtime, ~15 MiB image).
