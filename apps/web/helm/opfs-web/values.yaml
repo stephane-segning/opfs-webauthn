@@ -1,0 +1,52 @@
+# Default values for opfs-web.
+
+image:
+  # Production image; matches the GHCR namespace the build workflow
+  # pushes to. Forks override `image.repository`.
+  repository: ghcr.io/stephane-segning/opfs-web
+  # Falls back to `.Chart.AppVersion` when blank. ArgoCD Image
+  # Updater rewrites this field to pin digests in Git.
+  tag: ""
+  pullPolicy: Always
+
+# Frontend is stateless — scale horizontally as load demands. Knative
+# scales to zero on idle.
+autoscaling:
+  minScale: "0"
+  maxScale: "10"
+
+# nginx handles many concurrent connections per pod cheaply, so we
+# don't cap it tight.
+containerConcurrency: 0
+timeoutSeconds: 30
+
+resources:
+  requests:
+    cpu: "20m"
+    memory: "32Mi"
+  limits:
+    cpu: "200m"
+    memory: "128Mi"
+
+# nginx-unprivileged already runs as a non-root user. We still pin
+# the explicit policy here so a future image swap can't regress it.
+#
+# `runAsUser: 101` / `runAsGroup: 101` match the `nginx` user/group
+# in the `nginxinc/nginx-unprivileged` image — pinning them here
+# means a downstream `pullPolicy: Always` that resolves a future
+# image that changed the UID can't silently elevate.
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 101
+  runAsGroup: 101
+  allowPrivilegeEscalation: false
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop:
+      - ALL
+  # nginx needs to write to `/var/cache/nginx/*`, `/tmp`, and
+  # `/var/run/nginx.pid`. The unprivileged image already handles
+  # these via tmpfs volumes; toggling read-only root would require
+  # a separate `volumes:` block in the template.
+  readOnlyRootFilesystem: false

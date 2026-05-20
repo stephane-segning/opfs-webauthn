@@ -1,0 +1,28 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: {{ include "opfs-web.fullname" . }}
+  labels:
+    {{- include "opfs-web.labels" . | nindent 4 }}
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "opfs-web.selectorLabels" . | nindent 8 }}
+      annotations:
+        autoscaling.knative.dev/minScale: {{ .Values.autoscaling.minScale | quote }}
+        autoscaling.knative.dev/maxScale: {{ .Values.autoscaling.maxScale | quote }}
+    spec:
+      containerConcurrency: {{ .Values.containerConcurrency }}
+      timeoutSeconds: {{ .Values.timeoutSeconds }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ include "opfs-web.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http1
+              containerPort: 8080
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}

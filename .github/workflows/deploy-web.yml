@@ -1,0 +1,224 @@
+name: Build + sign opfs-web image and chart
+
+# Builds the opfs-web container (Next.js static export behind
+# nginx-unprivileged with COOP/COEP headers — ADR 0013), packages
+# the deploy Helm chart, signs both with `cosign` keyless via
+# Sigstore, and pushes them to GHCR. **No cluster apply.** Deploys
+# are driven by ArgoCD pulling the OCI Helm chart and the signed
+# image.
+#
+# Signing uses Sigstore's keyless flow — the GH Actions OIDC token
+# is exchanged for a short-lived Fulcio cert and the signature
+# lands in the Rekor transparency log. No private key material to
+# manage.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "packages/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "pnpm-lock.yaml"
+      # `apps/web/tsconfig.json` extends the root config. A change
+      # to shared compiler options (e.g. `target`, `lib`) flows into
+      # the built bundle, so we have to rebuild when it moves.
+      - "tsconfig.base.json"
+      - ".github/workflows/deploy-web.yml"
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "packages/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "pnpm-lock.yaml"
+      - "tsconfig.base.json"
+      - ".github/workflows/deploy-web.yml"
+  workflow_dispatch:
+
+# `id-token: write` is required for cosign keyless signing.
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: build-web-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/opfs-web
+  CHART_REPO: ghcr.io/${{ github.repository_owner }}/charts
+  CHART_NAME: opfs-web
+  CHART_PATH: apps/web/helm/opfs-web
+  # Build-time URL baked into the static bundle. Empty means the
+  # share client is disabled — fine for PR sanity builds but a
+  # regression on `main`, which is why this is a workflow-level
+  # constant rather than a per-job ARG default.
+  SHARE_BACKEND_URL: https://api.ocs.vaam.store
+
+jobs:
+  build-image:
+    name: build image (+ sign on main)
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (PR sanity-check, no push)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: false
+          # Keep the PR build talking to the same backend URL so a
+          # regression in share-client wiring fails the PR build.
+          build-args: |
+            NEXT_PUBLIC_SHARE_BACKEND_URL=${{ env.SHARE_BACKEND_URL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build + push image
+        if: github.event_name != 'pull_request'
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          # `NEXT_PUBLIC_*` envs are inlined into the static bundle
+          # at build time. Missing this arg ships a release with
+          # `getShareConfig` short-circuiting and the share UI
+          # disabled — silently. Always pass it.
+          build-args: |
+            NEXT_PUBLIC_SHARE_BACKEND_URL=${{ env.SHARE_BACKEND_URL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
+
+      - name: Sign image (keyless via Sigstore)
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "${IMAGE_NAME}@${DIGEST}"
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${IMAGE_NAME}@${DIGEST}"
+
+  publish-chart:
+    name: package + sign Helm chart
+    runs-on: ubuntu-latest
+    needs: build-image
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Lint chart
+        run: helm lint "${CHART_PATH}"
+
+      - name: Render chart (sanity-check templating)
+        run: |
+          helm template release "${CHART_PATH}" --namespace opfs > /tmp/rendered.yaml
+          test -s /tmp/rendered.yaml
+          echo "::group::Rendered manifest"
+          cat /tmp/rendered.yaml
+          echo "::endgroup::"
+
+      - name: Bump chart version + appVersion
+        if: github.event_name != 'pull_request'
+        id: chart
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+          SHA: ${{ github.sha }}
+        run: |
+          # OCI Helm uses `Chart.yaml` `version` as the immutable
+          # registry tag — fixing it at `0.1.0` either fails on tag-
+          # immutable registries or silently overwrites previous
+          # publishes. `version` becomes `${BASE}.${run_number}`
+          # (monotonic, unique per workflow run) and `appVersion`
+          # the short SHA, which the chart helper resolves into a
+          # real `:<short-sha>` image tag this same workflow pushed.
+          base=$(awk '/^version:/ { print $2 }' "${CHART_PATH}/Chart.yaml")
+          base_majmin=$(echo "${base}" | awk -F. '{ print $1"."$2 }')
+          version="${base_majmin}.${RUN_NUMBER}"
+          app_version="${SHA:0:7}"
+
+          sed -i -E "s|^version:.*$|version: ${version}|" "${CHART_PATH}/Chart.yaml"
+          sed -i -E "s|^appVersion:.*$|appVersion: \"${app_version}\"|" "${CHART_PATH}/Chart.yaml"
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "appVersion=${app_version}" >> "$GITHUB_OUTPUT"
+          echo "::group::Rewritten Chart.yaml"
+          cat "${CHART_PATH}/Chart.yaml"
+          echo "::endgroup::"
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io \
+              --username "${{ github.actor }}" \
+              --password-stdin
+
+      - name: Package + push chart
+        if: github.event_name != 'pull_request'
+        id: push
+        env:
+          VERSION: ${{ steps.chart.outputs.version }}
+        run: |
+          helm package "${CHART_PATH}" --destination /tmp
+          push_output=$(helm push "/tmp/${CHART_NAME}-${VERSION}.tgz" "oci://${CHART_REPO}" 2>&1 | tee /dev/stderr)
+          digest=$(echo "${push_output}" | awk -F': ' '/Digest:/ { print $2 }')
+          if [ -z "${digest}" ]; then
+            echo "::error::could not parse digest from helm push output"
+            exit 1
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
+
+      - name: Sign chart (keyless via Sigstore)
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign sign --yes "${CHART_REPO}/${CHART_NAME}@${DIGEST}"
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${CHART_REPO}/${CHART_NAME}@${DIGEST}"
