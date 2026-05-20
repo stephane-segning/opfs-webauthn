@@ -28,6 +28,7 @@ found, raise a PR to fix the docs in the same change.
 - [0011 — Engineering principles (SOLID, DRY, elegance)](./adrs/0011-engineering-principles.md)
 - [0012 — Self-hosted Rust share backend on Knative](./adrs/0012-self-hosted-rust-share-backend.md)
 - [0013 — Self-hosted frontend on Knative with cross-origin isolation](./adrs/0013-self-hosted-frontend.md)
+- [0014 — Runtime config for the share-backend URL](./adrs/0014-runtime-config.md)
 
 ## Working agreement
 

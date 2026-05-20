@@ -55,16 +55,15 @@ ENV CI=true
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
-# Build-time URL for the share-rendezvous backend. Inlined into
-# the static bundle by Next.js — `apps/web/src/share/share-config.ts`
-# refuses to enable the share client when this is unset, so a
-# blank value SILENTLY ships a release with sharing disabled.
-# The workflow always provides it on `main`; PR builds may leave
-# it blank (sharing off is acceptable for a Dockerfile smoke
-# test).
-ARG NEXT_PUBLIC_SHARE_BACKEND_URL=""
-ENV NEXT_PUBLIC_SHARE_BACKEND_URL=${NEXT_PUBLIC_SHARE_BACKEND_URL}
-
+# Runtime config: the share-backend URL is rendered into
+# `/config.js` by the entrypoint script at container start (see
+# `apps/web/docker/40-render-config.sh`), NOT baked at build
+# time. That keeps the published image cluster-agnostic — the
+# same digest deploys anywhere; the Helm chart's
+# `env.shareBackendUrl` flows through to the pod env, the
+# entrypoint substitutes it into the template, and the page
+# loads `/config.js` before any bundle script runs.
+#
 # Two-phase copy for layer caching:
 #   1) `pnpm fetch` populates the local pnpm store from the
 #      lockfile alone — no app source needed. The resulting layer
@@ -88,6 +87,29 @@ RUN NEXT_OUTPUT_EXPORT=1 pnpm --filter @opfs/web build
 FROM nginxinc/nginx-unprivileged:${NGINX_VERSION} AS runtime
 COPY apps/web/docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=frontend /app/apps/web/out /usr/share/nginx/html
+
+# Runtime config plumbing. The base image runs every file in
+# `/docker-entrypoint.d/` before exec'ing nginx, so the script
+# below renders `/config.js` from the pod's `SHARE_BACKEND_URL`
+# env var on each container start.
+COPY apps/web/docker/config.js.template /etc/opfs/config.js.template
+COPY apps/web/docker/40-render-config.sh /docker-entrypoint.d/40-render-config.sh
+# Two perms fixes, both running as root and dropping back:
+#   1. `chmod +x` on the entrypoint script — robust to checkouts
+#      that lose the bit (Windows FS, `git config core.fileMode
+#      false`); the base image only runs executable files and
+#      silently skips a non-+x one, which would be a misleading
+#      "sharing disabled" symptom.
+#   2. `chown 101:101 /usr/share/nginx/html` so the entrypoint
+#      (running as UID 101 once nginx-unprivileged drops perms)
+#      can write `config.js` next to the static export. Default
+#      perms on that dir are root:root 0755, which is read-only
+#      for the unprivileged user.
+USER root
+RUN chmod +x /docker-entrypoint.d/40-render-config.sh \
+ && chown -R 101:101 /usr/share/nginx/html
+USER 101
+
 EXPOSE 8080
 
 # nginx itself is the entrypoint via the base image's CMD; no

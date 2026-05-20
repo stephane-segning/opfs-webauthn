@@ -1,9 +1,14 @@
 //! CORS allow-list.
 //!
-//! The frontend is served from a different origin (GitHub Pages,
-//! custom domain, …) than this Worker, so the browser opts in
-//! explicitly. The list is parsed once from `ALLOWED_ORIGINS` at
-//! startup and re-checked per request — no runtime mutation.
+//! The frontend (`opfs-web`) and this backend (`opfs-share-backend`)
+//! deploy as two separate Knative Services on two different
+//! Knative-assigned hostnames, so the browser issues cross-origin
+//! POSTs that the allow-list must cover. `ALLOWED_ORIGINS` is the
+//! only thing connecting the two — set it per cluster to the
+//! frontend's Knative URL.
+//!
+//! Parsed once at startup from the env, re-checked per request —
+//! no runtime mutation.
 
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
