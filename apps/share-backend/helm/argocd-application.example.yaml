@@ -70,14 +70,26 @@ metadata:
     # uses a sibling repo and writes to
     # `envs/production/opfs-share-backend.values.yaml` — adjust
     # for your layout.
+    #
+    # `git-credentials` reuses the same GitHub App secret ArgoCD
+    # itself authenticates with — the
+    # `argocd.argoproj.io/secret-type: repo-creds` label tells
+    # both controllers to pick it up, so one App installation
+    # serves source-fetch AND digest write-back. The App must
+    # have `Contents: read & write` on the GitOps repo for the
+    # push to succeed.
+    #
+    # `git-repository` MUST be HTTPS, not SSH — GitHub App auth
+    # mints short-lived installation tokens used as HTTPS
+    # basic-auth; SSH bypasses that entirely.
     argocd-image-updater.argoproj.io/write-back-method: git
     argocd-image-updater.argoproj.io/git-branch: main
     argocd-image-updater.argoproj.io/git-repository: >-
-      git@github.com:stephane-segning/opfs-webauthn-gitops.git
+      https://github.com/stephane-segning/opfs-webauthn-gitops.git
     argocd-image-updater.argoproj.io/write-back-target: >-
       helmvalues:envs/production/opfs-share-backend.values.yaml
     argocd-image-updater.argoproj.io/git-credentials: >-
-      secret:argocd/opfs-webauthn-deploy
+      secret:argocd/github-app-creds--stephane-segning
 spec:
   project: default
   source:
@@ -93,12 +105,16 @@ spec:
     # `0.1.0` placeholder that's in the source tree.
     targetRevision: 0.1.*
     helm:
-      # Per-env overrides on top of the chart defaults. Sized down
-      # to "what staging would actually need to change"; production
-      # uses the chart defaults verbatim.
+      # **Must be set per cluster.** The chart default for
+      # `allowedOrigins` is `""`, which the CORS middleware
+      # treats as "reject every Origin'd request" — surfaces
+      # misconfiguration loudly instead of letting requests
+      # silently fail. Point this at the frontend's
+      # Knative-assigned URL (`opfs-web.<ns>.<config-domain>`).
+      # Comma-separate for preview / staging environments.
       values: |
         env:
-          allowedOrigins: https://ocs.vaam.store
+          allowedOrigins: https://opfs-web.opfs.example.com
   destination:
     server: https://kubernetes.default.svc
     namespace: opfs

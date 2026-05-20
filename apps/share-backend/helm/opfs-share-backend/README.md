@@ -30,11 +30,13 @@ spec:
   source:
     repoURL: ghcr.io/stephane-segning/charts
     chart: opfs-share-backend
-    targetRevision: 0.1.0
+    targetRevision: 0.1.*
     helm:
       values: |
         env:
-          allowedOrigins: https://ocs.vaam.store
+          # Required — the chart default is empty, which rejects
+          # every Origin'd request with 403. See below.
+          allowedOrigins: https://opfs-web.opfs.example.com
 ```
 
 See `../argocd-application.example.yaml` for the full `Application`
@@ -50,8 +52,25 @@ common overrides:
 | `image.repository` | `ghcr.io/stephane-segning/opfs-share-backend` | Forks / org migrations override here. |
 | `image.tag` | `""` (→ `Chart.AppVersion` → `latest`) | Published charts pin AppVersion to a short SHA; Image Updater rewrites this to digest. |
 | `autoscaling.maxScale` | `"1"` | The in-memory store is per-pod; raising this needs a shared store first. |
-| `env.allowedOrigins` | `https://ocs.vaam.store` | Comma-separated CORS list. |
+| `env.allowedOrigins` | `""` (rejects all) | **Set per cluster.** Comma-separated CORS list. Empty default means every Origin'd request gets 403 — the failure surfaces immediately instead of after a successful-looking POST. |
 | `env.trustedIpHeader` | `x-real-ip` | Per-IP rate-limit key; never `X-Forwarded-For`. |
+
+### Configuring `allowedOrigins`
+
+The frontend (`opfs-web`) and this backend land on two different
+Knative-assigned hostnames in the same cluster (ADR 0014, runtime
+config). The browser issues cross-origin POSTs, which the CORS
+middleware gates on `ALLOWED_ORIGINS`. The cluster knows the
+frontend hostname; the chart doesn't, so the default is empty.
+
+Set it to the value `kubectl` reports for the frontend KSvc:
+
+```sh
+kubectl -n opfs get ksvc opfs-web -o jsonpath='{.status.url}'
+```
+
+…and write that into the ArgoCD `Application` values block.
+Comma-separate for preview / staging environments.
 
 ## Verify a signed chart
 

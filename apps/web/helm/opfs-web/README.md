@@ -39,10 +39,46 @@ annotations.
 | --- | --- | --- |
 | `image.repository` | `ghcr.io/stephane-segning/opfs-web` | Forks override here. |
 | `image.tag` | `""` (→ `Chart.AppVersion` → `latest`) | Published charts pin AppVersion to a short SHA; Image Updater rewrites this to digest. |
+| `env.shareBackendUrl` | `""` (sharing **off**) | **Set per cluster.** Runtime config; flows into `window.__OPFS_CONFIG__.shareBackendUrl` via the entrypoint's `envsubst` (ADR 0014). Point at `https://opfs-share-backend.<ns>.<config-domain>`. |
 | `autoscaling.minScale` | `"0"` | Scale-to-zero. Cold start is <100 ms. |
 | `autoscaling.maxScale` | `"10"` | Stateless; safe to scale. |
 | `containerConcurrency` | `0` | Knative default = no per-pod limit (nginx is happy with many). |
 | `resources.requests.memory` | `32Mi` | nginx + ~10 MiB of static assets. |
+
+### Configuring the share-backend URL
+
+The share UI is enabled by setting `env.shareBackendUrl` to the
+Knative-assigned URL of the `opfs-share-backend` Service in the
+same cluster. Knative's networking layer (whatever's installed —
+Kourier, Istio, Traefik via the experimental provider, etc.)
+generates that hostname from the KSvc name, the namespace, and
+the cluster's `config-domain`. Check it with:
+
+```sh
+kubectl -n opfs get ksvc opfs-share-backend -o jsonpath='{.status.url}'
+```
+
+Set the result in your ArgoCD `Application` values block, e.g.:
+
+```yaml
+spec:
+  source:
+    helm:
+      values: |
+        env:
+          shareBackendUrl: https://opfs-share-backend.opfs.example.com
+```
+
+Verify after deploy by opening the browser console at the
+frontend's live URL:
+
+```js
+window.__OPFS_CONFIG__.shareBackendUrl   // expect the URL you set
+```
+
+If it's empty, the chart's `env.shareBackendUrl` wasn't piped
+through to the pod — `kubectl -n opfs describe pod` and check
+the `SHARE_BACKEND_URL` env value.
 
 ## Verify a signed chart
 
