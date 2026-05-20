@@ -1,0 +1,49 @@
+# Example ArgoCD `Application` for opfs-share-backend.
+#
+# **Not applied by this repo.** Live in the user's ArgoCD apps
+# repo / install. Committed here so the deploy pattern is
+# reviewable alongside the manifest it consumes.
+#
+# - `source.path` points at the Kustomize base in this repo.
+# - The Image Updater annotations tell ArgoCD to track new tags
+#   pushed to GHCR by the build workflow and patch
+#   `kustomization.yaml`'s `images:` stanza so the live workload
+#   ends up pinned to a signed digest rather than the mutable
+#   `:latest`. Cosign verification annotations enforce that the
+#   image was signed by *our* GitHub Actions workflow (keyless,
+#   via Sigstore) before the Updater is allowed to roll it out.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: opfs-share-backend
+  namespace: argocd
+  annotations:
+    # Watch GHCR for new tags of our image.
+    argocd-image-updater.argoproj.io/image-list: >-
+      backend=ghcr.io/stephane-segning/opfs-share-backend
+    # Use `digest` so the Updater pins to the immutable digest of
+    # the latest signed build, not the moving `:latest` tag.
+    argocd-image-updater.argoproj.io/backend.update-strategy: digest
+    # Write the patched tag back into Kustomize so the manifest
+    # the next ArgoCD sync sees is the one Updater wrote.
+    argocd-image-updater.argoproj.io/write-back-method: argocd
+    argocd-image-updater.argoproj.io/backend.kustomize.image-name: >-
+      ghcr.io/stephane-segning/opfs-share-backend
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/stephane-segning/opfs-webauthn.git
+    targetRevision: main
+    path: apps/share-backend/k8s
+  destination:
+    server: https://kubernetes.default.svc
+    # Adjust per environment.
+    namespace: opfs
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

@@ -1,0 +1,21 @@
+# Kustomize base for the opfs-share-backend Knative Service.
+#
+# Pointing an ArgoCD `Application` at this directory gets you the
+# default production wiring. Per-environment overlays (a staging
+# `ALLOWED_ORIGINS`, a different image tag, …) live in the
+# environment's own kustomization that includes this base via
+# `resources` and applies `patches` on top.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - service.yaml
+
+# Centralize the image reference so an overlay can override with
+# `images: [{ name: opfs-share-backend, newTag: <sha> }]` without
+# touching the rest of the manifest. ArgoCD Image Updater's
+# `kustomize` write-back also keys on this stanza.
+images:
+  - name: ghcr.io/stephane-segning/opfs-share-backend
+    newTag: latest
