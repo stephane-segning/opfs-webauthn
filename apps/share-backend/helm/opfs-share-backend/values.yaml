@@ -31,9 +31,21 @@ containerConcurrency: 100
 timeoutSeconds: 30
 
 env:
-  # Comma-separated CORS allow-list. Production default is the
-  # frontend host; staging / preview overlays override.
-  allowedOrigins: "https://ocs.vaam.store"
+  # Comma-separated CORS allow-list. **Must be set per cluster.**
+  # The frontend and the share-backend live on two different
+  # Knative-assigned hostnames (`opfs-web.opfs.<config-domain>`
+  # and `opfs-share-backend.opfs.<config-domain>`), so the
+  # browser issues cross-origin POSTs that need a matching
+  # allow-list entry. The chart doesn't know what your cluster's
+  # `config-domain` is, so the default here is empty — and an
+  # empty list rejects every Origin'd request with 403, which
+  # surfaces misconfiguration loudly instead of letting requests
+  # silently fail under "Origin not allowed".
+  #
+  # Set this in the ArgoCD `Application` values block. Example:
+  #   allowedOrigins: "https://opfs-web.opfs.example.com"
+  # Comma-separate for multiple environments / preview deploys.
+  allowedOrigins: ""
   # Which proxy-set header carries the real client IP. `x-real-ip`
   # works with both nginx-ingress and the Istio/Knative ingress
   # default. We never read `X-Forwarded-For` directly because its

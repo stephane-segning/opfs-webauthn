@@ -38,6 +38,23 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
 	return (
 		<html lang={DEFAULT_LOCALE}>
+			<head>
+				{/*
+				 * Runtime config: nginx renders `/config.js` from the
+				 * pod's env on container start (see
+				 * `apps/web/docker/40-render-config.sh`). This script
+				 * tag is intentionally **not** `defer`/`async` — it
+				 * has to set `window.__OPFS_CONFIG__` before any
+				 * bundle script reads it. Next.js auto-defers its own
+				 * scripts, so a classic blocking <script> in <head>
+				 * lands first regardless of bundle order.
+				 *
+				 * Static export emits this verbatim into every
+				 * generated HTML page; the file itself isn't part of
+				 * the build, the container creates it at start.
+				 */}
+				<script src={`${BASE_PATH}/config.js`} />
+			</head>
 			<body>
 				<NextIntlClientProvider
 					locale={DEFAULT_LOCALE}

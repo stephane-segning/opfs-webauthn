@@ -9,6 +9,17 @@ image:
   tag: ""
   pullPolicy: Always
 
+env:
+  # Runtime config for the share-rendezvous backend. The container
+  # entrypoint substitutes this into `/usr/share/nginx/html/config.js`
+  # on start; the page reads it via `window.__OPFS_CONFIG__` before
+  # any bundle script runs.
+  #
+  # Empty default = sharing UI disabled. Per cluster, override this
+  # in the `Application` values block with the Knative-assigned URL
+  # of the share-backend KSvc (e.g. `https://opfs-share-backend.opfs.<your-config-domain>`).
+  shareBackendUrl: ""
+
 # Frontend is stateless — scale horizontally as load demands. Knative
 # scales to zero on idle.
 autoscaling:

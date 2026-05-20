@@ -1,0 +1,11 @@
+/* Runtime configuration for opfs-web — rendered at container
+ * start by /docker-entrypoint.d/40-render-config.sh. See
+ * docs/adrs/0014-runtime-config.md for the why.
+ *
+ * Empty shareBackendUrl → share UI disabled. Object.freeze
+ * keeps a buggy bit of app code from mutating the config
+ * object out from under whoever else reads it.
+ */
+window.__OPFS_CONFIG__ = Object.freeze({
+  shareBackendUrl: "${SHARE_BACKEND_URL}",
+});
