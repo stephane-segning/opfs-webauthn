@@ -30,9 +30,18 @@ resources:
 
 # nginx-unprivileged already runs as a non-root user. We still pin
 # the explicit policy here so a future image swap can't regress it.
+#
+# `runAsUser: 101` / `runAsGroup: 101` match the `nginx` user/group
+# in the `nginxinc/nginx-unprivileged` image — pinning them here
+# means a downstream `pullPolicy: Always` that resolves a future
+# image that changed the UID can't silently elevate.
 securityContext:
   runAsNonRoot: true
+  runAsUser: 101
+  runAsGroup: 101
   allowPrivilegeEscalation: false
+  seccompProfile:
+    type: RuntimeDefault
   capabilities:
     drop:
       - ALL

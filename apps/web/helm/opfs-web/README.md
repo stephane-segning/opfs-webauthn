@@ -8,10 +8,14 @@ for `crossOriginIsolated` mode.
 
 ## Install from OCI
 
+The build workflow auto-bumps the chart patch version on every
+push to `main`, so `0.1.0` from this source tree is **not** what's
+on the registry. Pick a real published version:
+
 ```sh
 helm install opfs-web \
   oci://ghcr.io/stephane-segning/charts/opfs-web \
-  --version 0.1.0 \
+  --version 0.1.42 \
   --namespace opfs --create-namespace
 ```
 
@@ -22,7 +26,7 @@ spec:
   source:
     repoURL: ghcr.io/stephane-segning/charts
     chart: opfs-web
-    targetRevision: 0.1.0
+    targetRevision: 0.1.*
 ```
 
 See `../argocd-application.example.yaml` for the full
@@ -34,7 +38,7 @@ annotations.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `image.repository` | `ghcr.io/stephane-segning/opfs-web` | Forks override here. |
-| `image.tag` | `""` (→ `Chart.AppVersion`) | Image Updater rewrites this. |
+| `image.tag` | `""` (→ `Chart.AppVersion` → `latest`) | Published charts pin AppVersion to a short SHA; Image Updater rewrites this to digest. |
 | `autoscaling.minScale` | `"0"` | Scale-to-zero. Cold start is <100 ms. |
 | `autoscaling.maxScale` | `"10"` | Stateless; safe to scale. |
 | `containerConcurrency` | `0` | Knative default = no per-pod limit (nginx is happy with many). |

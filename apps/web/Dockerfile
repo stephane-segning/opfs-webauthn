@@ -20,11 +20,17 @@ ARG WASM_PACK_VERSION=0.13.1
 # ─── stage 1: build the WASM artifact ─────────────────────────
 # We pin wasm-pack so the dist bytes ArgoCD signs are
 # reproducible across runs.
+#
+# Layer-cache layout: copy ONLY the cargo workspace inputs the
+# wasm build actually touches. A frontend-only commit (no
+# `crates/` or `Cargo.*` change) re-uses the cached layers from
+# the previous build and skips the wasm-pack compile entirely.
 FROM rust:${RUST_VERSION}-bookworm AS wasm
 ARG WASM_PACK_VERSION
 WORKDIR /app
 RUN cargo install wasm-pack --locked --version ${WASM_PACK_VERSION}
-COPY . .
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
 RUN wasm-pack build crates/core \
       --target web \
       --out-dir /app/packages/core-wasm/dist \
@@ -40,9 +46,30 @@ ARG PNPM_VERSION
 ENV CI=true
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+
+# Build-time URL for the share-rendezvous backend. Inlined into
+# the static bundle by Next.js — `apps/web/src/share/share-config.ts`
+# refuses to enable the share client when this is unset, so a
+# blank value SILENTLY ships a release with sharing disabled.
+# The workflow always provides it on `main`; PR builds may leave
+# it blank (sharing off is acceptable for a Dockerfile smoke
+# test).
+ARG NEXT_PUBLIC_SHARE_BACKEND_URL=""
+ENV NEXT_PUBLIC_SHARE_BACKEND_URL=${NEXT_PUBLIC_SHARE_BACKEND_URL}
+
+# Two-phase copy for layer caching:
+#   1) `pnpm fetch` populates the local pnpm store from the
+#      lockfile alone — no app source needed. The resulting layer
+#      only invalidates when `pnpm-lock.yaml` changes.
+#   2) Source copy + `pnpm install --offline` then runs against
+#      the already-fetched store, with no network and no
+#      re-resolution.
+COPY pnpm-lock.yaml ./
+RUN pnpm fetch --frozen-lockfile
+
 COPY . .
 COPY --from=wasm /app/packages/core-wasm/dist /app/packages/core-wasm/dist
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --offline --frozen-lockfile
 # `NEXT_OUTPUT_EXPORT=1` switches `apps/web/next.config.js` to
 # `output: "export"`. The output lands in `apps/web/out/`.
 RUN NEXT_OUTPUT_EXPORT=1 pnpm --filter @opfs/web build

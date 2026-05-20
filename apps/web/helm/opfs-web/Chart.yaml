@@ -7,8 +7,19 @@ description: |
   `SharedArrayBuffer` and sqlite-wasm's OPFS VFSes can use it.
 type: application
 
+# `version` is the OCI registry tag (immutable). The publish
+# workflow rewrites it to `0.1.<run_number>` on every push to main
+# — see `.github/workflows/deploy-web.yml`. The `0.1.0` placeholder
+# here is for `helm lint` / `helm template` from a local checkout;
+# nothing is published under that tag.
 version: 0.1.0
-appVersion: "0.1.0"
+# `appVersion` flows into the chart's `image.tag` default via
+# `_helpers.tpl`. We keep it pointed at `"latest"` (always pushed
+# by the build job) so a `helm install` directly from this source
+# tree resolves to a real image. The publish workflow rewrites
+# this to the matching `<short-sha>` before packaging, so released
+# chart versions pin to an immutable image tag.
+appVersion: "latest"
 
 home: https://github.com/stephane-segning/opfs-webauthn
 sources:
