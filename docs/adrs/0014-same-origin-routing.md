@@ -61,24 +61,25 @@ Concretely:
   prefix-free. The ingress URL-rewrite strips `/api` so the
   backend doesn't need to know where it's mounted.
 - Reference routing manifests live in
-  [`docs/routing/`](../routing/) covering three shapes:
-  - `traefik-ingressroute.yaml` — the topology this project
-    uses in production: Traefik at the cluster edge forwarding
-    to Kourier (the default networking layer installed by the
-    KnativeServing operator). Traefik terminates TLS, picks
-    backends by path, and **rewrites the `Host` header** to the
-    KSvc's cluster-local DNS name so Kourier routes to the
-    right Revision pod.
-  - `httproute.yaml` — Gateway API HTTPRoute, the
-    forward-compatible default for any conformant gateway
-    (Traefik v3+, Cilium Gateway, Envoy Gateway, Contour).
-    Doesn't need the Host rewrite because Gateway API is itself
-    a Knative-supported networking layer.
-  - `istio-virtualservice.yaml` — Knative on Istio with the
-    classic VirtualService model. Same "is the networking
-    layer" property — no Host rewrite needed.
+  [`docs/routing/`](../routing/). The primary one is
+  `traefik-ingressroute.yaml`, which matches the production
+  topology: Traefik v3.6+ runs as Knative's networking layer
+  via the experimental Knative provider
+  (`ingress.class: traefik.ingress.networking.knative.dev`).
+  Knative doesn't natively support multiple KSvcs sharing one
+  hostname with path-based routing — see
+  [knative/serving#12588](https://github.com/knative/serving/issues/12588).
+  The workaround is a custom `IngressRoute` on the public host
+  that forwards each path branch **directly to the KSvc's
+  public Kubernetes Service**. Knative's SKS reconciler manages
+  those Service endpoints (Activator addresses when cold,
+  Revision pods when warm), so the ingress source is irrelevant
+  — Traefik inherits scale-to-zero transparently. No Host
+  rewrite, no Kourier in the picture. `httproute.yaml` and
+  `istio-virtualservice.yaml` cover alternate networking layers
+  for reference.
 
-  None of the three is packaged inside the Helm charts: the
+  None of the manifests is packaged inside the Helm charts: the
   routing layer is cluster-specific and we don't want to force
   an ingress implementation on consumers.
 

@@ -16,46 +16,55 @@ manifests.
 
 | File | When to use |
 |------|-------------|
-| [`traefik-ingressroute.yaml`](./traefik-ingressroute.yaml) | **Traefik in front of Kourier** (the topology this project uses). Traefik terminates TLS, path-routes, and rewrites `Host` on the way to Knative's networking layer. |
-| [`httproute.yaml`](./httproute.yaml) | Gateway API ≥ v1.0 — works with any conformant gateway (Traefik v3+, Contour, Cilium, Envoy Gateway). The forward-compatible default. |
-| [`istio-virtualservice.yaml`](./istio-virtualservice.yaml) | Knative on Istio with the classic VirtualService routing model. |
+| [`traefik-ingressroute.yaml`](./traefik-ingressroute.yaml) | **Traefik 3.6+ with the experimental Knative provider** (the topology this project uses). Traefik IS the Knative networking layer; this `IngressRoute` adds the public-host path routing on top of the Knative-managed internal routes. |
+| [`httproute.yaml`](./httproute.yaml) | Gateway API ≥ v1.0 — Traefik v3+, Cilium Gateway, Envoy Gateway, Contour, anything conformant. Pick this only if Knative is *also* configured to use the Gateway API networking layer (not the case in this project's deploy). |
+| [`istio-virtualservice.yaml`](./istio-virtualservice.yaml) | Knative on Istio. Reference only; not used in this project's deploy. |
+
+## Why path routing across two KSvcs needs a separate manifest
+
+Knative does **not** natively support multiple Knative Services
+sharing one hostname with path-based routing — see
+[knative/serving#12588](https://github.com/knative/serving/issues/12588).
+`DomainMapping` is strictly 1:1; `config-domain` only changes the
+default suffix; the internal `Ingress` CRD isn't designed to be
+authored by hand. So whichever networking layer you run with,
+the same-origin pattern is necessarily **two layers**:
+
+1. Knative's networking layer (Traefik, Kourier, Istio, or
+   Gateway API) handles the auto-generated KSvc routes on
+   their per-service hostnames (e.g.
+   `opfs-web.opfs.svc.cluster.local`).
+2. A custom routing manifest on the public host (`ocs.vaam.store`)
+   path-routes to each KSvc.
+
+## How `traefik-ingressroute.yaml` keeps scale-to-zero working
+
+Every Knative Service has a *public* Kubernetes Service whose
+endpoints are managed by Knative's SKS (`ServerlessService`)
+reconciler ([scaling/SYSTEM.md](https://github.com/knative/serving/blob/main/docs/scaling/SYSTEM.md)).
+When the KSvc is warm, those endpoints point at the Revision
+pods. When it scales to zero, SKS flips to Proxy mode and the
+endpoints become Activator addresses, which scale the KSvc back
+up on the next request.
+
+So an `IngressRoute` that targets `Service: opfs-web` in `opfs`
+inherits the Activator path automatically. We don't have to
+forward to Kourier and we don't have to rewrite the `Host`
+header — Knative's machinery sits behind the K8s Service
+transparently, regardless of who put a packet in front of it.
 
 ## Wiring contract
 
-All three manifests assume:
+The Traefik manifest assumes:
 
 - Two Knative Services in namespace `opfs`: `opfs-web` (the
   frontend) and `opfs-share-backend` (the rendezvous API).
-- A single inbound host (`ocs.vaam.store`) terminated at the
-  cluster's edge (Traefik / Gateway / Istio ingress).
+- A single inbound host (`ocs.vaam.store`) terminated at
+  Traefik's `websecure` entrypoint.
 - The share-backend listens on the same paths the frontend
   expects (`/rendezvous`, `/rendezvous/:code`, …). The routing
   layer **rewrites** `/api/rendezvous` → `/rendezvous` before
-  forwarding, so the backend stays oblivious to the prefix.
-
-## Talking to Knative from a non-Knative ingress
-
-Heads up if you're using Traefik (or any other ingress that's
-**not** part of Knative's networking layer): Knative builds its
-internal routes against the **cluster-local DNS name** of each
-KSvc (`<name>.<namespace>.svc.cluster.local`). Kourier / Istio
-match incoming requests against the `Host` header to pick the
-right Revision pod.
-
-A request arriving at Traefik has `Host: ocs.vaam.store`. That
-header is meaningless to Kourier — it'll either 404 or route to
-a wrong KSvc. So the Traefik manifest **rewrites `Host`** to the
-KSvc's cluster-local name before forwarding to Kourier. The
-HTTPRoute / VirtualService examples don't need that step because
-they ARE the Knative networking layer (Gateway API + Istio are
-the two networking-layer choices Knative supports directly).
-
-If you'd rather skip the Host rewrite, the alternative is to
-configure Knative's `config-domain` to make
-`ocs.vaam.store` an externally-known domain for the KSvc. That
-works but couples the KSvc to a specific public host, which is
-the opposite of what same-origin routing buys us — easier promotion
-across environments.
+  forwarding via the `stripPrefix` Middleware.
 
 ## Verifying after install
 
@@ -68,6 +77,5 @@ crossOriginIsolated;                              // expect true
 ```
 
 If the API call hits the frontend instead of the backend, the
-ingress isn't matching `/api/*` first — every example here puts
-the `/api` rule **above** the catch-all on purpose; check the
-rule order if you adapted the manifest.
+`/api/*` rule isn't matching first — check `priority` on both
+`IngressRoute` rules.

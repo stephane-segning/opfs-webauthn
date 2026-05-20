@@ -1,36 +1,51 @@
 # Traefik IngressRoute — same-origin routing for opfs-webauthn
 # (ADR 0014).
 #
-# Topology this assumes:
+# Topology this manifest assumes:
 #
-#     internet ─→ Traefik (TLS + path routing + Host rewrite)
-#                    │
-#                    ▼
-#              Kourier (knative-serving namespace, default
-#              networking layer installed by KnativeServing
-#              operator)
-#                    │
-#         ┌──────────┴───────────┐
-#         ▼                      ▼
-#     opfs-web KSvc        opfs-share-backend KSvc
+#   * Traefik v3.6+ installed with the experimental Knative
+#     provider enabled (`experimental: knative: true`,
+#     `providers.knative.enabled: true`).
+#   * Knative's `config-network` patched to
+#     `ingress.class: traefik.ingress.networking.knative.dev`
+#     so Traefik IS the Knative networking layer (no Kourier in
+#     the picture).
+#   * Two Knative Services in namespace `opfs`: `opfs-web` and
+#     `opfs-share-backend`.
 #
-# Why the indirection: KnativeServing's networking layer (Kourier
-# here; could be Istio in other clusters) routes to the right
-# Revision pod **by `Host` header**. The Host header that arrives
-# in Traefik is `ocs.vaam.store`, which Kourier doesn't recognize
-# — Knative built its routes from the cluster-local DNS name
-# (`<name>.<namespace>.svc.cluster.local`).
+# Knative does NOT natively support path-based routing of two
+# Knative Services on one host (see knative/serving#12588 —
+# DomainMapping is strictly 1:1). The pattern below is the
+# canonical workaround:
 #
-# So the routing manifest needs to do three things:
-#   1. Match the public host.
-#   2. Pick the right backend by path.
-#   3. **Rewrite `Host`** on the way to Kourier so the right
-#      KSvc Revision picks the request up.
+#   1. Let the Knative provider keep watching Knative's internal
+#      `Ingress` CRDs and producing the routes for the
+#      cluster-local hostnames (`<ksvc>.<ns>.<domain-suffix>`).
+#      Those stay available for direct testing and won't conflict
+#      with the public host.
+#   2. Add this `IngressRoute` on the public host
+#      (`ocs.vaam.store`). Forward each path branch directly to
+#      the KSvc's **Knative-created Kubernetes Service** in the
+#      `opfs` namespace.
 #
-# Step 3 is the part you don't see in HTTPRoute / VirtualService
-# examples — there, the routing layer IS the Knative networking
-# layer, and the rewrite is implicit. With Traefik in front of
-# Kourier we have to do it explicitly.
+# Why "directly to the KSvc's Service" works end-to-end including
+# scale-to-zero: every Knative Service has a *public* K8s Service
+# whose endpoints are managed by Knative's SKS reconciler. When
+# the KSvc is warm, those endpoints point at Revision pods. When
+# it scales to zero, SKS flips to Proxy mode and the endpoints
+# become Activator addresses, which scale the KSvc back up on
+# the next request. The ingress source doesn't matter — Traefik
+# targeting `Service: opfs-web` in `opfs` inherits the same
+# activation path the Knative-managed routes do.
+#
+# So we don't need a Kourier reference (Traefik replaced it) and
+# we don't need a `Host` header rewrite (we're targeting the
+# K8s Service by name, not Knative's hostname-based routing).
+#
+# Refs:
+#   * https://traefik.io/blog/scale-serverless-workloads-with-traefik-and-knative
+#   * https://github.com/knative/serving/blob/main/docs/scaling/SYSTEM.md
+#   * https://github.com/knative/serving/issues/12588
 
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -40,45 +55,38 @@ metadata:
 spec:
   entryPoints:
     # `websecure` is Traefik's conventional :443 entrypoint.
-    # Adjust if your install names it differently.
+    # Rename if your install uses something else.
     - websecure
   routes:
-    # `/api/*` lands here first. Traefik picks the higher-priority
-    # rule when two rules match — explicit `priority` removes any
-    # ambiguity about whose order it is (the longer-PathPrefix
-    # rule wins by default, but being explicit costs nothing).
+    # `/api/*` matches first. Explicit `priority` removes any
+    # ambiguity about whose rule wins when both could match —
+    # longer-PathPrefix wins by default, but spelling it out
+    # costs nothing.
     - match: Host(`ocs.vaam.store`) && PathPrefix(`/api`)
       kind: Rule
       priority: 100
       services:
-        - name: kourier
-          namespace: knative-serving
+        # Knative auto-creates this K8s Service in `opfs` when
+        # the `opfs-share-backend` KSvc is reconciled. Its
+        # endpoints are SKS-managed (Activator when cold,
+        # Revision pods when warm) — Traefik does NOT need to
+        # know which mode it's in.
+        - name: opfs-share-backend
           port: 80
-          # `passHostHeader: true` lets the Host-rewrite middleware
-          # below actually set the value Kourier sees. With `false`
-          # Traefik would override it to the destination service
-          # name, which isn't what Knative routes on.
-          passHostHeader: true
       middlewares:
         - name: opfs-api-stripprefix
-        - name: opfs-api-host
     # Catch-all → static frontend. Lower priority so `/api/*`
-    # never falls through here.
+    # always wins above.
     - match: Host(`ocs.vaam.store`)
       kind: Rule
       priority: 10
       services:
-        - name: kourier
-          namespace: knative-serving
+        - name: opfs-web
           port: 80
-          passHostHeader: true
-      middlewares:
-        - name: opfs-web-host
   tls:
-    # Hook this up to your cert-resolver (cert-manager via
-    # `Certificate` + `secretName`, ACME via Traefik's own
-    # resolver, etc.). The TLS termination is at THIS layer; the
-    # request inside the cluster is plain HTTP to Kourier.
+    # Hook into your cert-manager / Traefik ACME setup. The
+    # ingress terminates TLS here; the path to the KSvc Service
+    # inside the cluster is plain HTTP.
     certResolver: letsencrypt
 ---
 # Strip the `/api` mount point so the backend's routes
@@ -94,29 +102,3 @@ spec:
   stripPrefix:
     prefixes:
       - /api
----
-# Host rewrite for the `/api/*` route. Kourier matches Knative
-# Routes against the request's Host header; the cluster-local
-# DNS name of the KSvc is what Knative built its route for, so
-# that's what Host must be by the time the request reaches
-# Kourier.
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: opfs-api-host
-  namespace: opfs
-spec:
-  headers:
-    customRequestHeaders:
-      Host: opfs-share-backend.opfs.svc.cluster.local
----
-# Same idea for the frontend route.
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: opfs-web-host
-  namespace: opfs
-spec:
-  headers:
-    customRequestHeaders:
-      Host: opfs-web.opfs.svc.cluster.local
