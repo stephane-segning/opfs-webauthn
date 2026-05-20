@@ -1,0 +1,40 @@
+apiVersion: v2
+name: opfs-share-backend
+description: |
+  Knative Service for the opfs-webauthn share rendezvous (ADR 0012).
+  Single-replica autoscaling so the in-memory store stays correct;
+  swap the store impl and bump `maxScale` to scale horizontally.
+type: application
+
+# `version` is the OCI registry tag (immutable). The publish
+# workflow rewrites it to `0.1.<run_number>` on every push to main
+# — see `.github/workflows/deploy-share-backend.yml`. The `0.1.0`
+# placeholder here is for `helm lint` / `helm template` from a
+# local checkout; nothing is published under that tag.
+version: 0.1.0
+# `appVersion` flows into the chart's `image.tag` default via
+# `_helpers.tpl`. We keep it pointed at `"latest"` (always pushed
+# by the build job) so a `helm install` directly from this source
+# tree resolves to a real image. The publish workflow rewrites
+# this to the matching `<short-sha>` before packaging, so released
+# chart versions pin to an immutable image tag.
+appVersion: "latest"
+
+home: https://github.com/stephane-segning/opfs-webauthn
+sources:
+  - https://github.com/stephane-segning/opfs-webauthn
+keywords:
+  - knative
+  - opfs-webauthn
+  - rendezvous
+  - share
+maintainers:
+  - name: Stephane Segning
+    url: https://github.com/stephane-segning
+
+# Documented at the Helm-chart level so consumers don't have to dig
+# into the templates to discover what they need on the cluster.
+annotations:
+  artifacthub.io/prerelease: "false"
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/category: networking

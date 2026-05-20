@@ -1,0 +1,68 @@
+# Default values for opfs-share-backend.
+#
+# Every commented knob below is one consumers commonly override.
+# Anything not listed here is intentionally not configurable — open
+# a PR if you need a new surface rather than reaching for a `--set`
+# override on something internal.
+
+image:
+  # Production image; matches the GHCR namespace the build workflow
+  # pushes to. Forks override `image.repository`.
+  repository: ghcr.io/stephane-segning/opfs-share-backend
+  # `tag` falls back to `.Chart.AppVersion` when blank. ArgoCD
+  # Image Updater rewrites this field to pin digests in Git.
+  tag: ""
+  pullPolicy: Always
+
+# Knative autoscaling. `maxScale: "1"` keeps the in-memory
+# `RendezvousStore` correct under burst — multi-replica deploys
+# need a shared store first.
+autoscaling:
+  minScale: "0"
+  maxScale: "1"
+
+# Per-pod inbound concurrency target. Well above expected research
+# traffic; tune up if a single pod gets saturated.
+containerConcurrency: 100
+
+# Hard request timeout. The longest legit request is the
+# blob-poll long-poll, which the page-side client drives at 1.5 s
+# intervals — 30 s is plenty.
+timeoutSeconds: 30
+
+env:
+  # Comma-separated CORS allow-list. Production default is the
+  # frontend host; staging / preview overlays override.
+  allowedOrigins: "https://ocs.vaam.store"
+  # Which proxy-set header carries the real client IP. `x-real-ip`
+  # works with both nginx-ingress and the Istio/Knative ingress
+  # default. We never read `X-Forwarded-For` directly because its
+  # first hop is client-controllable (see ADR 0011 / handlers.rs).
+  trustedIpHeader: "x-real-ip"
+  port: "8080"
+  rustLog: "info,opfs_share_backend=debug"
+
+resources:
+  requests:
+    cpu: "50m"
+    memory: "32Mi"
+  limits:
+    cpu: "500m"
+    memory: "128Mi"
+
+securityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop:
+      - ALL
+
+# Note on signature verification: the chart deliberately does NOT
+# render any verification config into the pod. Sigstore enforcement
+# lives at admission time — install `policy-controller` (or kyverno-
+# sigstore) and apply a `ClusterImagePolicy` that matches the deploy
+# workflow's identity. The chart README and the ArgoCD example
+# document the exact identity strings to mirror.

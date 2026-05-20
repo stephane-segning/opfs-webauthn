@@ -1,0 +1,13 @@
+# Patterns to ignore when packaging the chart for distribution.
+# `helm package` walks the chart dir; anything matched here is
+# excluded from the resulting .tgz.
+.DS_Store
+.git/
+.gitignore
+.idea/
+.vscode/
+*.tmproj
+*.swp
+*.bak
+*.tgz
+*.tgz.prov

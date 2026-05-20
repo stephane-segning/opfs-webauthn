@@ -1,0 +1,16 @@
+{{- $svc := include "opfs-share-backend.fullname" . -}}
+opfs-share-backend installed as {{ $svc }} in namespace {{ .Release.Namespace }}.
+
+Knative will surface the URL on the Service status; watch with:
+
+  kubectl -n {{ .Release.Namespace }} get ksvc {{ $svc }} -w
+
+The frontend (`ocs.vaam.store`) reaches this service via the
+NEXT_PUBLIC_SHARE_BACKEND_URL build-time variable. Set it once the
+Knative ingress hands out a stable URL — typically `https://api.<domain>`.
+
+CORS allow-list currently:
+  {{ .Values.env.allowedOrigins }}
+
+Override per environment with `--set env.allowedOrigins=` or an
+ArgoCD `Application` values block.
