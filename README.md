@@ -2,6 +2,15 @@
 
 [![CI](https://github.com/stephane-segning/opfs-webauthn/actions/workflows/ci.yml/badge.svg)](https://github.com/stephane-segning/opfs-webauthn/actions/workflows/ci.yml)
 
+Live: **<https://ocs.vaam.store>**
+
+> [!IMPORTANT]
+> The app used to live at `stephane-segning.github.io/opfs-webauthn`.
+> WebAuthn passkeys are bound to the hostname they were enrolled
+> on (the "rpId" is baked into each credential), so any vault
+> created under the old domain **cannot be unlocked from the new
+> one**. Re-enroll on `ocs.vaam.store` to create a fresh vault.
+
 Local-first, end-to-end encrypted notes PWA. Identity is a WebAuthn
 passkey with the PRF extension; storage is SQLite over OPFS; crypto
 and DB row codec live in Rust compiled to WASM.

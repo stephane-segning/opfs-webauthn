@@ -4,8 +4,15 @@
  * sets that env. Local dev and the regular CI build leave it off and
  * use the standard Next.js build.
  *
- * `NEXT_PUBLIC_BASE_PATH` is set in CI when the app is served under
- * a project URL (e.g. `/opfs-webauthn`).
+ * `NEXT_PUBLIC_BASE_PATH` is read here so the same build serves
+ * either from a project URL (e.g. `/opfs-webauthn`) or the apex of
+ * a custom domain (production now: `ocs.vaam.store`, basePath
+ * unset → empty string → no prefix).
+ *
+ * Heads-up: moving the served domain changes the WebAuthn rpId
+ * (which is `location.hostname` at credential-creation time), so
+ * existing passkeys bound to the old hostname will not unlock the
+ * vault from the new one. Document loudly if we ever migrate again.
  */
 
 import createNextIntlPlugin from "next-intl/plugin";
