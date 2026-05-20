@@ -2,7 +2,10 @@
  * `@opfs/storage` — sqlite-wasm + OPFS writer with a typed RPC
  * client. Prefers a `SharedWorker` so multiple tabs share one
  * writer (ADR 0006); falls back to a dedicated `Worker` when
- * `SharedWorker` is unavailable (notably older iOS Safari).
+ * `SharedWorker` is unavailable (older iOS Safari) **or** when the
+ * shared worker can't install the OPFS SAH-pool VFS (Firefox today
+ * — `FileSystemFileHandle.prototype.createSyncAccessHandle` is
+ * exposed in DedicatedWorker but not yet in SharedWorker).
  *
  * The page-side `Repo` holds the `CryptoVault` and encrypts row
  * content before it ever crosses into the worker; the worker stores
@@ -36,6 +39,9 @@ export type CreateRepoOptions = {
 };
 
 const SHARED_WORKER_NAME = "opfs-storage-db";
+
+/** sqlite-wasm's exact message when the OPFS SAH-pool VFS isn't usable. */
+const OPFS_UNAVAILABLE_MARKER = "Missing required OPFS APIs";
 
 const supportsSharedWorker = (): boolean =>
 	typeof globalThis !== "undefined" &&
@@ -74,14 +80,15 @@ function adaptShared(shared: SharedWorker): WorkerLike {
 	};
 }
 
-function defaultTransport(): WorkerLike {
-	if (supportsSharedWorker()) {
-		const shared = new SharedWorker(
-			new URL("./db-shared-worker.ts", import.meta.url),
-			{ type: "module", name: SHARED_WORKER_NAME },
-		);
-		return adaptShared(shared);
-	}
+function makeSharedTransport(): WorkerLike {
+	const shared = new SharedWorker(
+		new URL("./db-shared-worker.ts", import.meta.url),
+		{ type: "module", name: SHARED_WORKER_NAME },
+	);
+	return adaptShared(shared);
+}
+
+function makeDedicatedTransport(): WorkerLike {
 	const dedicated = new Worker(new URL("./db-worker.ts", import.meta.url), {
 		type: "module",
 		name: SHARED_WORKER_NAME,
@@ -90,12 +97,65 @@ function defaultTransport(): WorkerLike {
 }
 
 /**
+ * Did `repo.bootstrap()` fail because the worker context lacks the
+ * OPFS-SAH APIs? The marker comes straight from sqlite-wasm's
+ * `installOpfsSAHPoolVfs`. We match the substring (not the full
+ * message) so future minor wording changes upstream don't break us.
+ */
+function isOpfsUnavailable(err: unknown): boolean {
+	if (err instanceof Error)
+		return err.message.includes(OPFS_UNAVAILABLE_MARKER);
+	if (typeof err === "string") return err.includes(OPFS_UNAVAILABLE_MARKER);
+	return false;
+}
+
+async function bootRepo(
+	transport: WorkerLike,
+	vault: CryptoVault,
+): Promise<Repo> {
+	const client = new WorkerClient(transport);
+	const repo = new Repo(client, vault);
+	try {
+		await repo.bootstrap();
+		return repo;
+	} catch (err) {
+		// Surface the worker handle so the caller can tear the worker
+		// down before attempting a different transport.
+		client.terminate();
+		throw err;
+	}
+}
+
+/**
  * Boot the storage worker and return a ready-to-use `Repo`.
+ *
+ * If `SharedWorker` is available we try it first (ADR 0006: one
+ * writer across tabs). If `bootstrap()` rejects with sqlite-wasm's
+ * "Missing required OPFS APIs." — currently Firefox, which exposes
+ * `createSyncAccessHandle` only in dedicated workers — we tear that
+ * worker down and retry on a `DedicatedWorker`. Per-tab semantics
+ * lose the cross-tab single-writer guarantee but the app stays
+ * usable, which is the right trade-off until SharedWorker support
+ * for OPFS-SAH is universal.
  */
 export async function createRepo(opts: CreateRepoOptions): Promise<Repo> {
-	const transport = opts.transport ?? defaultTransport();
-	const client = new WorkerClient(transport);
-	const repo = new Repo(client, opts.vault);
-	await repo.bootstrap();
-	return repo;
+	if (opts.transport) {
+		// Test / advanced path: caller controls the transport.
+		return bootRepo(opts.transport, opts.vault);
+	}
+	if (supportsSharedWorker()) {
+		try {
+			return await bootRepo(makeSharedTransport(), opts.vault);
+		} catch (err) {
+			if (!isOpfsUnavailable(err)) throw err;
+			// SharedWorker can't open OPFS on this browser. Fall through
+			// to the dedicated worker so the user still gets a working
+			// app, just per-tab instead of cross-tab.
+			console.warn(
+				"opfs-storage: SharedWorker lacks createSyncAccessHandle; falling back to dedicated worker",
+				err,
+			);
+		}
+	}
+	return bootRepo(makeDedicatedTransport(), opts.vault);
 }
