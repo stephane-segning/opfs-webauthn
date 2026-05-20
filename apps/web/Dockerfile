@@ -31,6 +31,14 @@ WORKDIR /app
 RUN cargo install wasm-pack --locked --version ${WASM_PACK_VERSION}
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
+# `apps/share-backend` is a workspace member of the root `Cargo.toml`
+# (the rendezvous server compiles native, not wasm). `wasm-pack`
+# shells out to `cargo metadata`, which walks every workspace member
+# even when only `crates/core` is being built — without share-backend's
+# manifest + sources here, metadata fails with "failed to read
+# apps/share-backend/Cargo.toml". Copying the directory keeps the
+# layer small, and frontend-only commits still skip this stage.
+COPY apps/share-backend/ ./apps/share-backend/
 RUN wasm-pack build crates/core \
       --target web \
       --out-dir /app/packages/core-wasm/dist \
