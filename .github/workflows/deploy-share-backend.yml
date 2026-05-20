@@ -194,15 +194,34 @@ jobs:
           cat "${CHART_PATH}/Chart.yaml"
           echo "::endgroup::"
 
-      - name: Log in to GHCR
+      - name: Log in to GHCR (helm)
         if: github.event_name != 'pull_request'
         run: |
           # `helm registry login` reads from stdin; the same
           # GITHUB_TOKEN that auths the image push works here.
+          # Note: this writes to `$HOME/.config/helm/registry/config.json`
+          # and is *not* sufficient for cosign — see the separate
+          # docker login below.
           echo "${{ secrets.GITHUB_TOKEN }}" \
             | helm registry login ghcr.io \
               --username "${{ github.actor }}" \
               --password-stdin
+
+      - name: Log in to GHCR (docker — for cosign)
+        if: github.event_name != 'pull_request'
+        # cosign reads `$HOME/.docker/config.json` (or whatever
+        # `DOCKER_CONFIG` points at) to authenticate the OCI push
+        # of the signature blob. The build-image job already does
+        # this via `docker/login-action`; the publish-chart job
+        # ran in a separate runner, so the helm-side login above
+        # is the only auth state and cosign sees nothing — fails
+        # with `UNAUTHORIZED: unauthenticated`. Same token, same
+        # registry; just write it to the file cosign reads.
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Package + push chart
         if: github.event_name != 'pull_request'
