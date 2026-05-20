@@ -5,15 +5,19 @@
 # store impl to Redis behind the same `RendezvousStore` trait and
 # bump `maxScale`.
 #
-# The CI workflow substitutes `${IMAGE}` for the just-pushed tag
-# before `kubectl apply`. Everything else is committed verbatim so
-# the manifest is reviewable on its own.
+# Placeholders the CI workflow substitutes before `kubectl apply`:
+#   ${IMAGE}           — the just-pushed container tag
+#   ${ALLOWED_ORIGINS} — comma-separated CORS allow-list
+#
+# Namespace is intentionally omitted; the deploy step passes
+# `kubectl apply -n <NAMESPACE>` (defaulting to whatever the
+# kubeconfig context resolves to). That keeps this manifest
+# portable across environments.
 
 apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
   name: opfs-share-backend
-  namespace: default
   labels:
     app.kubernetes.io/name: opfs-share-backend
     app.kubernetes.io/component: rendezvous-api
@@ -45,7 +49,7 @@ spec:
             - name: HOST
               value: "0.0.0.0"
             - name: ALLOWED_ORIGINS
-              value: "https://ocs.vaam.store"
+              value: ${ALLOWED_ORIGINS}
             # `x-real-ip` is what Knative's Istio ingress sets to the
             # immediate peer's IP. See the README + ADR 0011 for why
             # we never read `X-Forwarded-For` directly.

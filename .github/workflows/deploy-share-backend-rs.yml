@@ -95,16 +95,18 @@ jobs:
 
       - name: Render manifest with the just-pushed tag
         if: steps.creds.outputs.ready == 'true'
-        id: render
         env:
           IMAGE: ${{ env.IMAGE_NAME }}:${{ github.sha }}
-          NAMESPACE: ${{ vars.KNATIVE_NAMESPACE || 'default' }}
+          # CORS allow-list. Defaults to the production UI host;
+          # override per repo (or per environment) via the
+          # `ALLOWED_ORIGINS` repository variable.
+          ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS || 'https://ocs.vaam.store' }}
         run: |
           # `envsubst` would also work; sed keeps the toolchain to
           # what `azure/setup-kubectl` already provisions.
           sed \
             -e "s|\${IMAGE}|${IMAGE}|g" \
-            -e "s|namespace: default|namespace: ${NAMESPACE}|g" \
+            -e "s|\${ALLOWED_ORIGINS}|${ALLOWED_ORIGINS}|g" \
             apps/share-backend-rs/k8s/service.yaml > /tmp/service.rendered.yaml
           echo "::group::Rendered manifest"
           cat /tmp/service.rendered.yaml
@@ -112,7 +114,9 @@ jobs:
 
       - name: Apply Knative Service
         if: steps.creds.outputs.ready == 'true'
-        run: kubectl apply -f /tmp/service.rendered.yaml
+        env:
+          NAMESPACE: ${{ vars.KNATIVE_NAMESPACE || 'default' }}
+        run: kubectl apply -n "${NAMESPACE}" -f /tmp/service.rendered.yaml
 
       - name: Wait for rollout
         if: steps.creds.outputs.ready == 'true'

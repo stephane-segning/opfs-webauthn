@@ -94,7 +94,12 @@ Secrets / variables the workflow expects:
   permission to manage the `serving.knative.dev/v1` `Service` in
   the target namespace.
 - `KNATIVE_NAMESPACE` (**variable**, optional) — namespace to
-  deploy into. Defaults to `default`.
+  deploy into. Defaults to `default`. Applied via `kubectl -n`;
+  the manifest itself omits `metadata.namespace` so it ports
+  cleanly across environments.
+- `ALLOWED_ORIGINS` (**variable**, optional) — comma-separated
+  CORS allow-list substituted into the manifest at deploy time.
+  Defaults to `https://ocs.vaam.store`.
 
 The image is published at `ghcr.io/<owner>/opfs-share-backend`,
 tagged `:latest` and `:<git-sha>`.

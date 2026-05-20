@@ -30,8 +30,10 @@ WORKDIR /app
 COPY . .
 
 # Build only the share-backend binary. The wasm crates are
-# workspace members but irrelevant to this server.
-RUN cargo build --release --bin opfs-share-backend
+# workspace members but irrelevant to this server. `--locked`
+# guarantees the same resolution `Cargo.lock` pins; without it a
+# stealth dependency bump could land in production silently.
+RUN cargo build --release --locked --bin opfs-share-backend
 
 # Strip debug symbols — the distroless image keeps every byte we
 # hand it.
