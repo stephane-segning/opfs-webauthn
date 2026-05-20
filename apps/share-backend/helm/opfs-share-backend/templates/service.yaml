@@ -28,15 +28,15 @@ spec:
           image: {{ include "opfs-share-backend.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            # Single Knative port. The container must listen on
-            # exactly this address; `env.port` flows through to the
-            # backend's `PORT` env so the two stay in lockstep when
-            # operators override either.
+            # Single Knative port. Knative auto-injects `PORT=<containerPort>`
+            # into the container, so the backend's `env::var("PORT")`
+            # read picks up the right value with no separate env
+            # entry — and setting one explicitly is rejected by the
+            # `validation.webhook.serving.knative.dev` admission
+            # check ("PORT is a reserved environment variable").
             - name: http1
               containerPort: {{ .Values.env.port | int }}
           env:
-            - name: PORT
-              value: {{ .Values.env.port | quote }}
             - name: HOST
               value: "0.0.0.0"
             - name: ALLOWED_ORIGINS
