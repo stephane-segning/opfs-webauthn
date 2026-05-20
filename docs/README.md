@@ -26,6 +26,7 @@ found, raise a PR to fix the docs in the same change.
 - [0009 — State management (Zustand)](./adrs/0009-state-management.md)
 - [0010 — Modular packages & crates](./adrs/0010-modular-packages-and-crates.md)
 - [0011 — Engineering principles (SOLID, DRY, elegance)](./adrs/0011-engineering-principles.md)
+- [0012 — Self-hosted Rust share backend on Knative](./adrs/0012-self-hosted-rust-share-backend.md)
 
 ## Working agreement
 
