@@ -1,0 +1,59 @@
+# Gateway API HTTPRoute — same-origin routing for opfs-webauthn
+# (ADR 0014).
+#
+# `/api/*` → opfs-share-backend Knative service, with the `/api`
+#            prefix stripped before forwarding.
+# `/*`     → opfs-web Knative service, served as a static export.
+#
+# Both Knative Services are reachable through the cluster-local
+# service name; Gateway API resolves `backendRefs` against the
+# Service object Knative materializes for every revision. We
+# target the `*-private` Service so the request stays inside the
+# mesh and doesn't bounce through the Knative ingress a second
+# time.
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: opfs-webauthn
+  namespace: opfs
+spec:
+  parentRefs:
+    # Cluster-wide gateway listening on the production host. Adapt
+    # `namespace` + `name` to your gateway. With cert-manager this
+    # gateway terminates TLS and forwards plaintext into the mesh.
+    - name: opfs-gateway
+      namespace: gateway-system
+  hostnames:
+    - ocs.vaam.store
+  rules:
+    # `/api/*` is matched first — Gateway API evaluates rules
+    # top-to-bottom. The `URLRewrite` filter strips `/api` so the
+    # backend's routes (`/rendezvous`, `/rendezvous/:code/blob`)
+    # stay prefix-free. Keep the rendezvous backend ignorant of
+    # the mount point — moving it later (`/v1/api`, `/share`)
+    # only touches this manifest.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: opfs-share-backend
+          port: 80
+          weight: 1
+    # Catch-all → static frontend. Order matters; this MUST come
+    # after the `/api` rule.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: opfs-web
+          port: 80
+          weight: 1

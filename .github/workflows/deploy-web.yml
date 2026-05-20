@@ -54,11 +54,11 @@ env:
   CHART_REPO: ghcr.io/${{ github.repository_owner }}/charts
   CHART_NAME: opfs-web
   CHART_PATH: apps/web/helm/opfs-web
-  # Build-time URL baked into the static bundle. Empty means the
-  # share client is disabled — fine for PR sanity builds but a
-  # regression on `main`, which is why this is a workflow-level
-  # constant rather than a per-job ARG default.
-  SHARE_BACKEND_URL: https://api.ocs.vaam.store
+  # `NEXT_PUBLIC_SHARE_BACKEND_URL` is intentionally not pinned
+  # here. ADR 0014 routes `/api/*` to the share-backend on the
+  # same origin, so the Dockerfile's `ARG …=/api` default is what
+  # we ship. Override in a per-env build only if some staging is
+  # cross-origin.
 
 jobs:
   build-image:
@@ -87,10 +87,6 @@ jobs:
           context: .
           file: apps/web/Dockerfile
           push: false
-          # Keep the PR build talking to the same backend URL so a
-          # regression in share-client wiring fails the PR build.
-          build-args: |
-            NEXT_PUBLIC_SHARE_BACKEND_URL=${{ env.SHARE_BACKEND_URL }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -105,12 +101,6 @@ jobs:
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
-          # `NEXT_PUBLIC_*` envs are inlined into the static bundle
-          # at build time. Missing this arg ships a release with
-          # `getShareConfig` short-circuiting and the share UI
-          # disabled — silently. Always pass it.
-          build-args: |
-            NEXT_PUBLIC_SHARE_BACKEND_URL=${{ env.SHARE_BACKEND_URL }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true

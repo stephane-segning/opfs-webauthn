@@ -55,14 +55,17 @@ ENV CI=true
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
-# Build-time URL for the share-rendezvous backend. Inlined into
-# the static bundle by Next.js — `apps/web/src/share/share-config.ts`
-# refuses to enable the share client when this is unset, so a
-# blank value SILENTLY ships a release with sharing disabled.
-# The workflow always provides it on `main`; PR builds may leave
-# it blank (sharing off is acceptable for a Dockerfile smoke
-# test).
-ARG NEXT_PUBLIC_SHARE_BACKEND_URL=""
+# Share-rendezvous backend URL (ADR 0014). Defaults to the
+# relative path `/api`: the cluster ingress routes `/api/*` to
+# the share-backend Knative service on the same origin, so
+# `fetch` calls land without CORS and without a build-time URL
+# pin.
+#
+# Override only for cross-origin deploys (staging not yet behind
+# the ingress, dev pointing at a remote rendezvous) by passing
+# `--build-arg NEXT_PUBLIC_SHARE_BACKEND_URL=https://…`. An
+# explicit empty string disables the share UI entirely.
+ARG NEXT_PUBLIC_SHARE_BACKEND_URL=/api
 ENV NEXT_PUBLIC_SHARE_BACKEND_URL=${NEXT_PUBLIC_SHARE_BACKEND_URL}
 
 # Two-phase copy for layer caching:

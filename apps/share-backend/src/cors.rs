@@ -1,9 +1,24 @@
 //! CORS allow-list.
 //!
-//! The frontend is served from a different origin (GitHub Pages,
-//! custom domain, …) than this Worker, so the browser opts in
-//! explicitly. The list is parsed once from `ALLOWED_ORIGINS` at
-//! startup and re-checked per request — no runtime mutation.
+//! Same-origin production deploys (ADR 0014) route `/api/*`
+//! through the cluster ingress to this backend on the same host
+//! as the frontend, so browsers send `Origin: https://<host>` on
+//! POSTs and no preflight at all on simple GETs. The allow-list
+//! still matches the frontend host (`https://ocs.vaam.store` by
+//! default), so same-origin requests pass through transparently.
+//!
+//! This middleware therefore serves two distinct deployments
+//! from one code path:
+//!   * Same-origin production: `Origin` matches the allow-list,
+//!     requests pass, response carries the CORS headers as a
+//!     no-op (browsers don't enforce same-origin checks against
+//!     them).
+//!   * Cross-origin staging / dev: `ALLOWED_ORIGINS` is widened
+//!     to include the dev frontend host, requests pre-flight,
+//!     headers gate access.
+//!
+//! The list is parsed once from `ALLOWED_ORIGINS` at startup and
+//! re-checked per request — no runtime mutation.
 
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};

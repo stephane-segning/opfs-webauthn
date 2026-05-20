@@ -31,8 +31,11 @@ containerConcurrency: 100
 timeoutSeconds: 30
 
 env:
-  # Comma-separated CORS allow-list. Production default is the
-  # frontend host; staging / preview overlays override.
+  # Comma-separated CORS allow-list. The same-origin production
+  # deploy (ADR 0014) still benefits from this — browsers send
+  # `Origin: https://ocs.vaam.store` on same-origin POSTs and we
+  # want those to pass. Staging / preview overlays widen the
+  # list with their cross-origin frontend host.
   allowedOrigins: "https://ocs.vaam.store"
   # Which proxy-set header carries the real client IP. `x-real-ip`
   # works with both nginx-ingress and the Istio/Knative ingress

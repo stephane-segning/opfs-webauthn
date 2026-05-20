@@ -1,0 +1,51 @@
+# Istio VirtualService — same-origin routing for opfs-webauthn
+# (ADR 0014).
+#
+# Use this manifest if your cluster runs Knative on Istio and
+# you're not on Gateway API yet (or your Istio version predates
+# `gateway.networking.k8s.io/v1` support).
+#
+# `/api/*` → opfs-share-backend Knative service, with the `/api`
+#            prefix rewritten away before forwarding.
+# `/*`     → opfs-web Knative service.
+#
+# Istio's match list is evaluated top-to-bottom, so the more
+# specific `/api` block MUST come first. Knative materializes a
+# regular Kubernetes Service for each `Service`, which is what
+# we target via `destination.host`.
+
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: opfs-webauthn
+  namespace: opfs
+spec:
+  hosts:
+    - ocs.vaam.store
+  gateways:
+    # Cluster ingress gateway terminating TLS for the production
+    # host. Adapt to your gateway resource.
+    - knative-serving/knative-ingress-gateway
+  http:
+    - name: api
+      match:
+        - uri:
+            prefix: /api/
+      rewrite:
+        # Drop the `/api` mount point so backend routes
+        # (`/rendezvous`, …) stay prefix-free.
+        uri: /
+      route:
+        - destination:
+            host: opfs-share-backend.opfs.svc.cluster.local
+            port:
+              number: 80
+    - name: web
+      match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: opfs-web.opfs.svc.cluster.local
+            port:
+              number: 80
