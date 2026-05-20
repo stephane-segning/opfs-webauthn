@@ -1,17 +1,44 @@
 # Example ArgoCD `Application` for opfs-share-backend.
 #
-# **Not applied by this repo.** Live in the user's ArgoCD apps
+# **Not applied by this repo.** Lives in the user's ArgoCD apps
 # repo / install. Committed here so the deploy pattern is
 # reviewable alongside the manifest it consumes.
 #
-# - `source.path` points at the Kustomize base in this repo.
-# - The Image Updater annotations tell ArgoCD to track new tags
-#   pushed to GHCR by the build workflow and patch
-#   `kustomization.yaml`'s `images:` stanza so the live workload
-#   ends up pinned to a signed digest rather than the mutable
-#   `:latest`. Cosign verification annotations enforce that the
-#   image was signed by *our* GitHub Actions workflow (keyless,
-#   via Sigstore) before the Updater is allowed to roll it out.
+# What this manifest sets up:
+#
+# 1. `source.path` points at the Kustomize base in this repo.
+#
+# 2. The Image Updater annotations tell ArgoCD to track the
+#    `:latest` tag on GHCR (mutable, advanced by the build
+#    workflow on every push to `main`) and pin the live workload
+#    to the **digest** of that tag — immutable, so once a
+#    specific digest is recorded in Git nothing can swap the
+#    running bits without a new commit.
+#
+# 3. The Cosign verification annotations require that each digest
+#    Image Updater would roll out carries a Sigstore signature
+#    issued by *our* GitHub Actions workflow. Keyless flow: the
+#    OIDC issuer is `token.actions.githubusercontent.com` and the
+#    cert subject pattern pins the signer to this repository's
+#    deploy workflow on `main`. A leaked GHCR token alone cannot
+#    push an image that passes this check.
+#
+# 4. `write-back-method: git` means Image Updater commits the
+#    digest pin back into this repo's `kustomization.yaml`, so
+#    Git remains the single source of truth. `argocd` write-back
+#    would patch the live `Application` resource instead, which
+#    breaks down in an app-of-apps setup (parent reconciliation
+#    overwrites the patch). Requires ArgoCD to have a write-
+#    enabled repo credential (a deploy key or PAT with `contents:
+#    write` on this repo).
+#
+# 5. Cluster-side admission enforcement is **strongly recommended**
+#    as belt-and-suspenders to (3): install Sigstore's
+#    `policy-controller` (or kyverno-sigstore) and apply a
+#    `ClusterImagePolicy` that mirrors the same identity match.
+#    That ensures even a manually-applied workload can't run
+#    unsigned bits. Image Updater annotations alone gate the
+#    *update path*; the policy controller gates the *runtime*.
 
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -19,17 +46,35 @@ metadata:
   name: opfs-share-backend
   namespace: argocd
   annotations:
-    # Watch GHCR for new tags of our image.
+    # Track the `:latest` tag explicitly. `digest` update-strategy
+    # uses this to know which mutable tag to follow before it
+    # resolves to a digest pin.
     argocd-image-updater.argoproj.io/image-list: >-
-      backend=ghcr.io/stephane-segning/opfs-share-backend
-    # Use `digest` so the Updater pins to the immutable digest of
-    # the latest signed build, not the moving `:latest` tag.
+      backend=ghcr.io/stephane-segning/opfs-share-backend:latest
     argocd-image-updater.argoproj.io/backend.update-strategy: digest
-    # Write the patched tag back into Kustomize so the manifest
-    # the next ArgoCD sync sees is the one Updater wrote.
-    argocd-image-updater.argoproj.io/write-back-method: argocd
     argocd-image-updater.argoproj.io/backend.kustomize.image-name: >-
       ghcr.io/stephane-segning/opfs-share-backend
+
+    # Sigstore keyless verification — Image Updater refuses to
+    # promote a digest that doesn't carry a valid signature from
+    # this repo's deploy workflow.
+    argocd-image-updater.argoproj.io/backend.signature-type: cosign
+    argocd-image-updater.argoproj.io/backend.cosign.certificate-oidc-issuer: >-
+      https://token.actions.githubusercontent.com
+    argocd-image-updater.argoproj.io/backend.cosign.certificate-identity-regexp: >-
+      ^https://github\.com/stephane-segning/opfs-webauthn/\.github/workflows/deploy-share-backend\.yml@.*$
+
+    # Persist digest pins to Git, not just to the live Application
+    # CR. Requires a write-enabled repo credential on ArgoCD; see
+    # the secret reference below.
+    argocd-image-updater.argoproj.io/write-back-method: git
+    argocd-image-updater.argoproj.io/write-back-target: >-
+      kustomization:apps/share-backend/k8s
+    argocd-image-updater.argoproj.io/git-branch: main
+    # Reference to a `Secret` in the `argocd` namespace holding
+    # the deploy key / PAT. Create separately; never commit creds.
+    argocd-image-updater.argoproj.io/git-credentials: >-
+      secret:argocd/opfs-webauthn-deploy
 spec:
   project: default
   source:

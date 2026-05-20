@@ -46,7 +46,17 @@ spec:
         - name: opfs-share-backend
           # Pinned to `:latest` here; the Image Updater on the
           # ArgoCD `Application` rewrites this to the signed
-          # digest published by the build workflow.
+          # digest published by the build workflow on every push
+          # to `main`.
+          #
+          # The owner segment matches this repository's GHCR
+          # namespace (codex flagged that this hardcodes
+          # `stephane-segning`). Forks / org migrations should
+          # override the image reference in a per-environment
+          # Kustomize overlay rather than editing the base — the
+          # `kustomization.yaml` sibling exposes the
+          # `images: [name: <ref>, newName: <override>]` knob for
+          # exactly that.
           image: ghcr.io/stephane-segning/opfs-share-backend:latest
           imagePullPolicy: Always
           ports:
