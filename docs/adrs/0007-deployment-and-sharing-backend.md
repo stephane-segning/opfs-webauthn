@@ -1,7 +1,15 @@
 # ADR 0007 — Deployment & sharing backend
 
-- **Status**: Accepted
+- **Status**: Accepted (sharing-backend portion superseded by [ADR 0012](./0012-self-hosted-rust-share-backend.md))
 - **Date**: 2026-05-19
+
+> [!NOTE]
+> The frontend-on-GitHub-Pages decision below stands. The sharing
+> backend ran on Cloudflare Workers + KV + R2 from May 19 to
+> May 20 2026, then moved to a self-hosted Rust service on Knative
+> per ADR 0012. The cryptographic and HTTP contracts described
+> below are unchanged; only the runtime, storage, and deploy
+> targets are.
 
 ## Context
 
