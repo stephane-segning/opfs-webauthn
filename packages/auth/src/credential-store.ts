@@ -116,22 +116,22 @@ function isNotFoundError(err: unknown): boolean {
 }
 
 async function readVaultFile(): Promise<VaultCredential | null> {
-	let root: FileSystemDirectoryHandle;
-	try {
-		root = await opfsRoot();
-	} catch (err) {
-		if (err instanceof CredentialStoreUnavailableError) {
-			// Treat "no OPFS" as "no vault" for reads — the caller will
-			// surface the `fresh` state and the next `set()` will throw
-			// loudly if the user actually tries to enroll.
-			return null;
-		}
-		throw err;
-	}
+	// We deliberately do NOT swallow `CredentialStoreUnavailableError`
+	// here. Codex caught the trap: returning `null` when OPFS is
+	// blocked routes the bootstrap to the `fresh` screen, the user
+	// starts a full passkey ceremony, and only THEN does `set()`
+	// throw — leaving an orphan WebAuthn credential behind on every
+	// retry. Propagating the error lets `AuthScreen` surface the
+	// real reason (vault can't be persisted in this browser) before
+	// the user touches the authenticator.
+	const root = await opfsRoot();
 	let fileHandle: FileSystemFileHandle;
 	try {
 		fileHandle = await root.getFileHandle(VAULT_FILE);
 	} catch (err) {
+		// `NotFoundError` is the genuine "no vault yet" signal — return
+		// `null` so the screen renders `fresh`. Any other read failure
+		// (permission, runtime quirk) is suspicious enough to surface.
 		if (isNotFoundError(err)) return null;
 		throw err;
 	}
@@ -144,11 +144,28 @@ async function writeVaultFile(credential: VaultCredential): Promise<void> {
 	const root = await opfsRoot();
 	const fileHandle = await root.getFileHandle(VAULT_FILE, { create: true });
 	const writable = await fileHandle.createWritable();
+	// `createWritable()` uses a temp/swap file that is **committed**
+	// on `close()` — even if `write()` failed midway. Codex caught
+	// this: a partial-write-then-close would atomically replace a
+	// previously-valid credential file with corrupt JSON, locking
+	// the user out on reload. The right shape is "abort the stream
+	// on failure, close it on success" — `abort()` discards the
+	// pending swap so the existing on-disk file is untouched.
 	try {
 		await writable.write(JSON.stringify(serialize(credential)));
-	} finally {
-		await writable.close();
+	} catch (err) {
+		// `abort()` may itself throw (e.g. stream already errored).
+		// We don't care — we're already in the failure path, and the
+		// original write error is the one that matters. Suppress to
+		// keep the stack trace intact.
+		try {
+			await writable.abort(err instanceof Error ? err : undefined);
+		} catch {
+			/* ignore — propagate the original write failure */
+		}
+		throw err;
 	}
+	await writable.close();
 }
 
 async function deleteVaultFile(): Promise<void> {
