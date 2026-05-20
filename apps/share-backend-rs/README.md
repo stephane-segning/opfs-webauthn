@@ -71,14 +71,30 @@ Repo-level config that needs setting once:
 | Knative manifest / Deployment env | `TRUSTED_IP_HEADER` | `x-real-ip` — required for per-IP rate limiting. Without it the limiter degrades to a single global bucket. We never read `X-Forwarded-For` directly (client-controllable first hop). |
 | Knative manifest / Deployment env | `PORT` | `8080` (default, matches the binary) |
 
-Manifests + CI workflow land in the follow-up PR. The shape will be:
+Manifests + CI workflow live in:
 
-- Multi-stage Dockerfile (`cargo-chef` for layer caching, distroless
-  `cc` runtime, ~15 MiB image).
-- Knative `Service` with `containerConcurrency: 100` and
-  `autoscaling.knative.dev/maxScale: "1"` so the in-memory store
-  stays correct without a shared backend.
-- GitHub Actions workflow that builds the image, pushes to the
-  configured registry, and `kubectl apply`s the manifest. Skips
-  gracefully when the cluster credentials aren't present so fork
-  CI stays green.
+- `Dockerfile` — multi-stage build, distroless
+  `cc-debian12:nonroot` runtime (~50 MiB; the `cc` flavor bundles
+  libssl/libcrypto). Layer caching delegated to the workflow's
+  buildx GHA cache instead of `cargo-chef`, which has an MSRV
+  conflict with our pinned 1.85 toolchain.
+- `k8s/service.yaml` — Knative `Service` with
+  `containerConcurrency: 100`, `maxScale: 1` (single replica so
+  the in-memory store stays correct), a read-only root filesystem,
+  and conservative resource requests.
+- `.github/workflows/deploy-share-backend-rs.yml` — on push to
+  `main` touching `apps/share-backend-rs/**`, `crates/crypto/**`,
+  or `Cargo.toml/lock`: builds + pushes the image to GHCR, applies
+  the manifest, and `kubectl wait`s for `Ready=True`. Skips
+  gracefully when `KUBE_CONFIG` isn't set so fork CI stays green.
+
+Secrets / variables the workflow expects:
+
+- `KUBE_CONFIG` (**secret**) — `base64 -w0` of a kubeconfig with
+  permission to manage the `serving.knative.dev/v1` `Service` in
+  the target namespace.
+- `KNATIVE_NAMESPACE` (**variable**, optional) — namespace to
+  deploy into. Defaults to `default`.
+
+The image is published at `ghcr.io/<owner>/opfs-share-backend`,
+tagged `:latest` and `:<git-sha>`.
