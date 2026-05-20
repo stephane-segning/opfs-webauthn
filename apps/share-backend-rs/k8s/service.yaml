@@ -28,9 +28,12 @@ spec:
         # Pin the replica count: the in-memory store is per-pod.
         autoscaling.knative.dev/minScale: "0"
         autoscaling.knative.dev/maxScale: "1"
-        # The default ingress class; override if the cluster uses
-        # something different.
-        networking.knative.dev/ingress-class: istio.ingress.networking.knative.dev
+        # Ingress class intentionally not pinned. The cluster's
+        # Knative `config-network` configmap chooses the default
+        # (Istio / Kourier / Contour / …); hardcoding one here
+        # would deadlock `kubectl wait` on clusters that use a
+        # different ingress. Override per-Service via this
+        # annotation if a deployment really needs a specific one.
     spec:
       # Concurrency is bounded so a single pod doesn't fall over
       # under burst — well above expected research traffic.
