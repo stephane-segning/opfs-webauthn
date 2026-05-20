@@ -3,6 +3,7 @@
 import {
 	AuthCeremonyError,
 	AuthUnsupportedError,
+	CredentialStoreUnavailableError,
 	credentialStore,
 	detectSupport,
 	enroll,
@@ -45,29 +46,71 @@ export function AuthScreen() {
 	const t = useTranslations();
 	const [state, setState] = useState<State>({ kind: "loading" });
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `t` is stable per locale change; bootstrap is mount-only by design.
 	useEffect(() => {
 		const support = detectSupport();
 		if (!support.webauthn) {
 			setState({ kind: "unsupported" });
 			return;
 		}
-		const stored = credentialStore.get();
-		setState(
-			stored ? { kind: "locked", credential: stored } : { kind: "fresh" },
-		);
+		// Bootstrap is async because the store is OPFS-backed.
+		// `cancelled` guards against StrictMode's double-mount and
+		// unmount-during-read. The try/catch keeps the screen out
+		// of a stuck `loading` state if the store throws — codex
+		// caught that an unhandled rejection here would never reach
+		// `setState`, leaving the spinner up forever.
+		let cancelled = false;
+		void (async () => {
+			try {
+				const stored = await credentialStore.get();
+				if (cancelled) return;
+				setState(
+					stored ? { kind: "locked", credential: stored } : { kind: "fresh" },
+				);
+			} catch (err) {
+				if (cancelled) return;
+				// `CredentialStoreUnavailableError` means OPFS is missing
+				// or blocked — the user could complete a passkey ceremony
+				// but the resulting credential metadata could never be
+				// persisted. That's effectively the same dead-end as "no
+				// WebAuthn", so route it through the `unsupported` screen
+				// rather than `fresh` (which would let them start a
+				// ceremony that's guaranteed to fail at persist time).
+				if (err instanceof CredentialStoreUnavailableError) {
+					setState({ kind: "unsupported" });
+					return;
+				}
+				setState({
+					kind: "error",
+					message: errorMessageFrom(err, t("auth.error.unknown")),
+					retry: () => setState({ kind: "fresh" }),
+				});
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
 	}, []);
 
 	async function doEnroll() {
 		setState({ kind: "busy", what: "enrolling" });
+		let result: Awaited<ReturnType<typeof enroll>> | undefined;
 		try {
-			const result = await enroll();
-			credentialStore.set(result.credential);
+			result = await enroll();
+			// The wasm vault is `Send`-but-not-`Sync`-style: each handle
+			// owns a chunk of the wasm heap that we have to release
+			// explicitly. If `set()` rejects (OPFS write failure, quota,
+			// runtime quirk), the vault has been generated but never
+			// shown — we must free it here, otherwise every failed
+			// enrollment leaks wasm heap. Codex caught it.
+			await credentialStore.set(result.credential);
 			setState({
 				kind: "unlocked",
 				vault: result.vault,
 				credential: result.credential,
 			});
 		} catch (err) {
+			if (result) result.vault.free();
 			setState({
 				kind: "error",
 				message: errorMessageFrom(err, t("auth.error.unknown")),
@@ -96,10 +139,45 @@ export function AuthScreen() {
 		setState({ kind: "locked", credential: state.credential });
 	}
 
-	function doForget() {
-		credentialStore.clear();
+	async function doForget() {
+		// **Await** the clear before transitioning. Codex caught a
+		// race: if `doForget` returned synchronously and the user
+		// immediately tapped Enroll, the still-in-flight `clear()`
+		// could land *after* `enroll()`'s `set()` and erase the
+		// fresh credential. Serializing is the simple fix.
+		//
+		// Snapshot the credential for the retry path *before* freeing
+		// the vault — if the clear fails, we want to drop the user
+		// back to `locked` so the next reload doesn't surprise them
+		// with a still-existing credential they thought was gone
+		// (codex's point: the previous version set `fresh` from the
+		// retry, which is a lie that reappears on reload).
+		const snapshot =
+			state.kind === "unlocked" || state.kind === "locked"
+				? state.credential
+				: undefined;
 		if (state.kind === "unlocked") state.vault.free();
-		setState({ kind: "fresh" });
+		setState({ kind: "busy", what: "enrolling" });
+		try {
+			await credentialStore.clear();
+			setState({ kind: "fresh" });
+		} catch (err) {
+			setState({
+				kind: "error",
+				message: errorMessageFrom(err, t("auth.error.unknown")),
+				// Drop back to `locked` so the UI matches the disk: the
+				// credential is still there, the user can try Forget
+				// again from the locked screen. If we have no snapshot
+				// (bootstrap-time clear?) fall back to `fresh` — there's
+				// nothing else to surface.
+				retry: () =>
+					setState(
+						snapshot
+							? { kind: "locked", credential: snapshot }
+							: { kind: "fresh" },
+					),
+			});
+		}
 	}
 
 	if (state.kind === "unlocked") {

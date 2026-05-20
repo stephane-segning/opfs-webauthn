@@ -2,12 +2,24 @@ import { base64UrlToBytes, bytesToBase64Url } from "./codec.js";
 import type { VaultCredential } from "./types.js";
 
 /**
- * `localStorage` key under which the vault credential is persisted.
- * `localStorage` is the right home for *credential metadata*
- * specifically — it's small, multi-tab visible, and survives reloads.
- * The encrypted notes themselves live in OPFS; see ADR 0004.
+ * Filename inside the origin's OPFS root where the vault credential
+ * metadata lives.
+ *
+ * Originally this was a `localStorage` key. Two problems with that
+ * home:
+ *   1. It surfaced alarmingly in DevTools → Application → Local
+ *      Storage even though the `wrappedDek` is useless without a
+ *      passkey ceremony to derive the KEK.
+ *   2. `localStorage.clear()` and "clear cookies for this site"
+ *      silently nuked the wrap, locking the user out even though
+ *      the passkey still existed.
+ *
+ * OPFS is the same scope the encrypted notes already live in (one
+ * origin = one vault), and it's much harder to clear by accident —
+ * only "delete all site data" reaches it, and that's an intentional
+ * destructive action.
  */
-const STORAGE_KEY = "opfs-webauthn/v1/credential";
+const VAULT_FILE = "opfs-webauthn-vault.json";
 
 type Serialized = {
 	readonly credentialId: string;
@@ -61,29 +73,130 @@ function deserialize(raw: string): VaultCredential | null {
 }
 
 /**
- * Tiny `localStorage`-backed adapter. Pluggable — callers in tests
- * or alternate hosts can supply their own implementation of this
- * interface and pass it to `enroll` / `unlock` (next iteration); the
- * default singleton talks to `window.localStorage`.
+ * Distinguish "no OPFS in this environment" from other persistence
+ * failures so writes / deletes can fail loudly instead of pretending
+ * to have succeeded.
+ */
+export class CredentialStoreUnavailableError extends Error {
+	constructor() {
+		super(
+			"OPFS is not available in this context; the vault credential cannot be persisted",
+		);
+		this.name = "CredentialStoreUnavailableError";
+	}
+}
+
+/**
+ * OPFS root accessor. `navigator.storage.getDirectory()` works in
+ * main-thread context — only `createSyncAccessHandle` is restricted
+ * to workers, and we don't need it here (the file is tiny and we
+ * read/write it with the async stream APIs).
+ *
+ * Throws `CredentialStoreUnavailableError` if the API is missing or
+ * the root handle can't be obtained. Reads can recover from that
+ * (treat it as "no vault here"), but writes must propagate so the
+ * caller learns the credential didn't actually land on disk.
+ */
+async function opfsRoot(): Promise<FileSystemDirectoryHandle> {
+	if (typeof navigator === "undefined" || !navigator.storage?.getDirectory) {
+		throw new CredentialStoreUnavailableError();
+	}
+	try {
+		return await navigator.storage.getDirectory();
+	} catch (err) {
+		const cause = err instanceof Error ? err : new Error(String(err));
+		const failure = new CredentialStoreUnavailableError();
+		(failure as { cause?: unknown }).cause = cause;
+		throw failure;
+	}
+}
+
+function isNotFoundError(err: unknown): boolean {
+	return err instanceof DOMException && err.name === "NotFoundError";
+}
+
+async function readVaultFile(): Promise<VaultCredential | null> {
+	// We deliberately do NOT swallow `CredentialStoreUnavailableError`
+	// here. Codex caught the trap: returning `null` when OPFS is
+	// blocked routes the bootstrap to the `fresh` screen, the user
+	// starts a full passkey ceremony, and only THEN does `set()`
+	// throw — leaving an orphan WebAuthn credential behind on every
+	// retry. Propagating the error lets `AuthScreen` surface the
+	// real reason (vault can't be persisted in this browser) before
+	// the user touches the authenticator.
+	const root = await opfsRoot();
+	let fileHandle: FileSystemFileHandle;
+	try {
+		fileHandle = await root.getFileHandle(VAULT_FILE);
+	} catch (err) {
+		// `NotFoundError` is the genuine "no vault yet" signal — return
+		// `null` so the screen renders `fresh`. Any other read failure
+		// (permission, runtime quirk) is suspicious enough to surface.
+		if (isNotFoundError(err)) return null;
+		throw err;
+	}
+	const file = await fileHandle.getFile();
+	const text = await file.text();
+	return deserialize(text);
+}
+
+async function writeVaultFile(credential: VaultCredential): Promise<void> {
+	const root = await opfsRoot();
+	const fileHandle = await root.getFileHandle(VAULT_FILE, { create: true });
+	const writable = await fileHandle.createWritable();
+	// `createWritable()` uses a temp/swap file that is **committed**
+	// on `close()` — even if `write()` failed midway. Codex caught
+	// this: a partial-write-then-close would atomically replace a
+	// previously-valid credential file with corrupt JSON, locking
+	// the user out on reload. The right shape is "abort the stream
+	// on failure, close it on success" — `abort()` discards the
+	// pending swap so the existing on-disk file is untouched.
+	try {
+		await writable.write(JSON.stringify(serialize(credential)));
+	} catch (err) {
+		// `abort()` may itself throw (e.g. stream already errored).
+		// We don't care — we're already in the failure path, and the
+		// original write error is the one that matters. Suppress to
+		// keep the stack trace intact.
+		try {
+			await writable.abort(err instanceof Error ? err : undefined);
+		} catch {
+			/* ignore — propagate the original write failure */
+		}
+		throw err;
+	}
+	await writable.close();
+}
+
+async function deleteVaultFile(): Promise<void> {
+	const root = await opfsRoot();
+	try {
+		await root.removeEntry(VAULT_FILE);
+	} catch (err) {
+		// `NotFoundError` is fine; idempotent clear. Anything else
+		// (permission, lock, runtime quirk) is a real failure the UI
+		// needs to know about — otherwise `doForget` looks successful
+		// while the credential is still on disk.
+		if (isNotFoundError(err)) return;
+		throw err;
+	}
+}
+
+/**
+ * Pluggable adapter for the vault credential. The default singleton
+ * persists to OPFS (origin-scoped, hidden from the localStorage tab,
+ * survives soft cookie-clears). No migration from the previous
+ * localStorage-backed implementation — the project is pre-1.0 and
+ * still in testing, so existing testers just re-enroll.
  */
 export type CredentialStore = {
-	readonly get: () => VaultCredential | null;
-	readonly set: (credential: VaultCredential) => void;
-	readonly clear: () => void;
+	readonly get: () => Promise<VaultCredential | null>;
+	readonly set: (credential: VaultCredential) => Promise<void>;
+	readonly clear: () => Promise<void>;
 };
 
 export const credentialStore: CredentialStore = {
-	get(): VaultCredential | null {
-		if (typeof localStorage === "undefined") return null;
-		const raw = localStorage.getItem(STORAGE_KEY);
-		return raw ? deserialize(raw) : null;
-	},
-	set(credential): void {
-		if (typeof localStorage === "undefined") return;
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(serialize(credential)));
-	},
-	clear(): void {
-		if (typeof localStorage === "undefined") return;
-		localStorage.removeItem(STORAGE_KEY);
-	},
+	get: readVaultFile,
+	set: writeVaultFile,
+	clear: deleteVaultFile,
 };
