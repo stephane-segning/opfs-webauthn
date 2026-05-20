@@ -25,11 +25,13 @@ jobs:
       SKIP_ENV_VALIDATION: "1"
       # Switch on the static-export branch of apps/web/next.config.js.
       NEXT_OUTPUT_EXPORT: "1"
-      # Pages serves this app under a project URL (e.g. /opfs-webauthn);
-      # apps/web reads this to set basePath + assetPrefix.
-      NEXT_PUBLIC_BASE_PATH: /opfs-webauthn
-      # Optional: if the Cloudflare Worker (ADR 0007, apps/share-backend)
-      # has been deployed and its URL is set as the
+      # The app is now served from the apex of a custom domain
+      # (`ocs.vaam.store` per the CNAME file in apps/web/public/), so
+      # `basePath` is empty. The variable is read by next.config.js;
+      # an unset value collapses to "" and Next.js drops the prefix.
+      # If we ever re-host on a project URL, re-add it here.
+      # Optional: if the share backend (ADR 0007 / 0012) has been
+      # deployed and its URL is set as the
       # `NEXT_PUBLIC_SHARE_BACKEND_URL` repository variable, the
       # static build wires the share UI to it. Leaving the variable
       # unset hides the share affordances entirely — there's no

@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/stephane-segning/opfs-webauthn/actions/workflows/ci.yml/badge.svg)](https://github.com/stephane-segning/opfs-webauthn/actions/workflows/ci.yml)
 
+Live: **<https://ocs.vaam.store>**
+
 Local-first, end-to-end encrypted notes PWA. Identity is a WebAuthn
 passkey with the PRF extension; storage is SQLite over OPFS; crypto
 and DB row codec live in Rust compiled to WASM.
