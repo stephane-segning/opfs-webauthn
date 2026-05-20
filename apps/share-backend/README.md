@@ -2,7 +2,7 @@
 
 Self-hosted Rust HTTP backend for the recipient-first share rendezvous
 ([ADR 0012](../../docs/adrs/0012-self-hosted-rust-share-backend.md)).
-Replaces the Cloudflare Worker that used to live in `apps/share-backend/`;
+Replaces the TypeScript Cloudflare Worker that used to live here;
 the HTTP contract is identical so the page-side `@opfs/share-client`
 needs no changes beyond pointing `NEXT_PUBLIC_SHARE_BACKEND_URL` at
 the new deploy.

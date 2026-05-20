@@ -63,7 +63,7 @@ pnpm --filter @opfs/web dev
   (ADR 0006).
 - **Crypto + repo**: Rust → WASM, AES-256-GCM rows, HKDF-derived KEK
   from WebAuthn PRF (ADR 0005).
-- **Sharing**: Rust + Knative rendezvous service with a BLAKE3-commitment
+- **Sharing**: Rust + Knative rendezvous service (ADR 0012) with a BLAKE3-commitment
   pickup code (ADR 0007).
 
 ## License
