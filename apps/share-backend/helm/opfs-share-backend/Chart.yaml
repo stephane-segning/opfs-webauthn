@@ -1,0 +1,32 @@
+apiVersion: v2
+name: opfs-share-backend
+description: |
+  Knative Service for the opfs-webauthn share rendezvous (ADR 0012).
+  Single-replica autoscaling so the in-memory store stays correct;
+  swap the store impl and bump `maxScale` to scale horizontally.
+type: application
+
+# Chart and app versions are kept in lockstep; both are bumped via
+# the build workflow when needed. The `0.x.y` line tracks ADR 0012
+# until we cut a 1.0 promise.
+version: 0.1.0
+appVersion: "0.1.0"
+
+home: https://github.com/stephane-segning/opfs-webauthn
+sources:
+  - https://github.com/stephane-segning/opfs-webauthn
+keywords:
+  - knative
+  - opfs-webauthn
+  - rendezvous
+  - share
+maintainers:
+  - name: Stephane Segning
+    url: https://github.com/stephane-segning
+
+# Documented at the Helm-chart level so consumers don't have to dig
+# into the templates to discover what they need on the cluster.
+annotations:
+  artifacthub.io/prerelease: "false"
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/category: networking

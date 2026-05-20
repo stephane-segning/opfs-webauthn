@@ -73,13 +73,15 @@ The split is GitOps-strict: **CI never touches the cluster.**
   via Sigstore. The GH Actions OIDC token is exchanged for a
   short-lived Fulcio cert and the signature lands in the Rekor
   transparency log — no private key material to manage.
-- **ArgoCD** reconciles the manifests under `apps/share-backend/k8s/`
-  on its own cadence. The `kustomization.yaml` next to
-  `service.yaml` is the base; environment overlays (or ArgoCD
-  Image Updater) pin specific signed digests at sync time.
-- See `apps/share-backend/k8s/argocd-application.example.yaml` for
-  a ready-to-adapt `Application` with Image Updater + cosign
-  verification annotations.
+- **ArgoCD** pulls the Helm chart from
+  `oci://ghcr.io/<owner>/charts/opfs-share-backend` (published by
+  the same workflow, signed by the same Sigstore keyless flow)
+  and reconciles a Knative `Service` from it. The chart sources
+  live in `apps/share-backend/helm/opfs-share-backend/`; the
+  release boundary is the OCI artifact, not the Git path.
+- See `apps/share-backend/helm/argocd-application.example.yaml`
+  for a ready-to-adapt `Application` with Image Updater + cosign
+  verification annotations wired against the OCI chart source.
 
 Permissions the workflow requires (already set in the workflow file):
 

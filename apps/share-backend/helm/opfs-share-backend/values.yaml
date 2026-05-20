@@ -1,0 +1,68 @@
+# Default values for opfs-share-backend.
+#
+# Every commented knob below is one consumers commonly override.
+# Anything not listed here is intentionally not configurable — open
+# a PR if you need a new surface rather than reaching for a `--set`
+# override on something internal.
+
+image:
+  # Production image; matches the GHCR namespace the build workflow
+  # pushes to. Forks override `image.repository`.
+  repository: ghcr.io/stephane-segning/opfs-share-backend
+  # `tag` falls back to `.Chart.AppVersion` when blank. ArgoCD
+  # Image Updater rewrites this field to pin digests in Git.
+  tag: ""
+  pullPolicy: Always
+
+# Knative autoscaling. `maxScale: "1"` keeps the in-memory
+# `RendezvousStore` correct under burst — multi-replica deploys
+# need a shared store first.
+autoscaling:
+  minScale: "0"
+  maxScale: "1"
+
+# Per-pod inbound concurrency target. Well above expected research
+# traffic; tune up if a single pod gets saturated.
+containerConcurrency: 100
+
+# Hard request timeout. The longest legit request is the
+# blob-poll long-poll, which the page-side client drives at 1.5 s
+# intervals — 30 s is plenty.
+timeoutSeconds: 30
+
+env:
+  # Comma-separated CORS allow-list. Production default is the
+  # frontend host; staging / preview overlays override.
+  allowedOrigins: "https://ocs.vaam.store"
+  # Which proxy-set header carries the real client IP. `x-real-ip`
+  # works with both nginx-ingress and the Istio/Knative ingress
+  # default. We never read `X-Forwarded-For` directly because its
+  # first hop is client-controllable (see ADR 0011 / handlers.rs).
+  trustedIpHeader: "x-real-ip"
+  port: "8080"
+  rustLog: "info,opfs_share_backend=debug"
+
+resources:
+  requests:
+    cpu: "50m"
+    memory: "32Mi"
+  limits:
+    cpu: "500m"
+    memory: "128Mi"
+
+securityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# Set to true and pass `cosign.publicKey` (or rely on cluster-side
+# `policy-controller`) when running in a production cluster. The
+# default keeps the chart usable on dev clusters that don't yet
+# have a Sigstore admission policy.
+verification:
+  enabled: false
+  cosign:
+    publicKey: ""

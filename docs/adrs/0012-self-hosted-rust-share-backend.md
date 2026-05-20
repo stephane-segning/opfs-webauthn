@@ -71,11 +71,14 @@ deployed on Kubernetes via Knative.
        repository's GitHub Actions workflow.
     3. `cosign verify` immediately after, asserting the
        just-published image carries our signature.
-  ArgoCD reconciles the Knative `Service` from
-  `apps/share-backend/k8s/`. The Image Updater annotations on the
-  ArgoCD `Application` (see `k8s/argocd-application.example.yaml`)
-  pin specific signed digests as new builds land, so the
-  committed manifest stays at `:latest` without churn.
+  The same workflow then packages the deploy Helm chart at
+  `apps/share-backend/helm/opfs-share-backend/` and pushes it as
+  an OCI artifact to `ghcr.io/<owner>/charts/opfs-share-backend`,
+  signing the chart digest with the same Sigstore keyless flow.
+  ArgoCD reconciles from the OCI chart (see
+  `helm/argocd-application.example.yaml`); Image Updater patches
+  `image.tag` to pin signed digests as new builds land, so the
+  committed chart stays on `:latest` without churn.
 
 ### What stays the same
 

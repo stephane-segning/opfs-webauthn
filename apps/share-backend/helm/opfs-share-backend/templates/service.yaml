@@ -1,0 +1,47 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: {{ include "opfs-share-backend.fullname" . }}
+  labels:
+    {{- include "opfs-share-backend.labels" . | nindent 4 }}
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "opfs-share-backend.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Single-replica pin: the in-memory `RendezvousStore` is
+        # per-pod. Swap to a shared store + raise `maxScale` to
+        # scale horizontally.
+        autoscaling.knative.dev/minScale: {{ .Values.autoscaling.minScale | quote }}
+        autoscaling.knative.dev/maxScale: {{ .Values.autoscaling.maxScale | quote }}
+        # Ingress class deliberately not pinned. Cluster's
+        # `config-network` configmap chooses the default; override
+        # per-Service if a deployment really needs to lock to one
+        # (e.g. `networking.knative.dev/ingress-class:
+        # kourier.ingress.networking.knative.dev`).
+    spec:
+      containerConcurrency: {{ .Values.containerConcurrency }}
+      timeoutSeconds: {{ .Values.timeoutSeconds }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ include "opfs-share-backend.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http1
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: {{ .Values.env.port | quote }}
+            - name: HOST
+              value: "0.0.0.0"
+            - name: ALLOWED_ORIGINS
+              value: {{ .Values.env.allowedOrigins | quote }}
+            - name: TRUSTED_IP_HEADER
+              value: {{ .Values.env.trustedIpHeader | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.env.rustLog | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}

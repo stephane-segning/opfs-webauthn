@@ -1,11 +1,10 @@
-name: Build + sign share-backend image
+name: Build + sign share-backend image and chart
 
-# Builds the Rust rendezvous backend container (ADR 0012), signs
-# it with `cosign` keyless / Sigstore, and pushes both `:latest`
-# and `:<sha>` tags to GHCR. **No cluster apply.** Deploys are
-# driven by ArgoCD reconciling the manifest under
-# `apps/share-backend/k8s/`; the workflow's job is only to publish
-# a verified image artifact ArgoCD can pick up.
+# Builds the Rust rendezvous backend container (ADR 0012), packages
+# the deploy Helm chart, signs both with `cosign` keyless / Sigstore,
+# and pushes the image + chart to GHCR. **No cluster apply.**
+# Deploys are driven by ArgoCD pulling the OCI Helm chart and the
+# signed image.
 #
 # Signing uses Sigstore's keyless flow — the GH Actions OIDC token
 # is exchanged for a short-lived signing cert via Fulcio, and the
@@ -43,11 +42,19 @@ concurrency:
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/opfs-share-backend
+  # Chart published alongside the image, under `/charts/` to keep
+  # the OCI namespace tidy. ArgoCD `Application` sources point at
+  # `oci://${CHART_REPO}` with `chart: opfs-share-backend`.
+  CHART_REPO: ghcr.io/${{ github.repository_owner }}/charts
+  CHART_NAME: opfs-share-backend
+  CHART_PATH: apps/share-backend/helm/opfs-share-backend
 
 jobs:
-  build:
-    name: build (+ sign on main)
+  build-image:
+    name: build image (+ sign on main)
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -112,3 +119,86 @@ jobs:
             --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${IMAGE_NAME}@${DIGEST}"
+
+  publish-chart:
+    name: package + sign Helm chart
+    runs-on: ubuntu-latest
+    # Run the chart pipeline after the image so the chart can never
+    # advertise a digest the image build hasn't actually produced.
+    needs: build-image
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Lint chart
+        run: helm lint "${CHART_PATH}"
+
+      - name: Render chart (sanity-check templating)
+        run: |
+          # `helm template` exits non-zero on a broken template; runs
+          # on every PR too, so a regression on the chart fails fast.
+          helm template release "${CHART_PATH}" --namespace opfs > /tmp/rendered.yaml
+          test -s /tmp/rendered.yaml
+          echo "::group::Rendered manifest"
+          cat /tmp/rendered.yaml
+          echo "::endgroup::"
+
+      - name: Read chart version
+        if: github.event_name != 'pull_request'
+        id: chart
+        run: |
+          version=$(awk '/^version:/ { print $2 }' "${CHART_PATH}/Chart.yaml")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        run: |
+          # `helm registry login` reads from stdin; the same
+          # GITHUB_TOKEN that auths the image push works here.
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io \
+              --username "${{ github.actor }}" \
+              --password-stdin
+
+      - name: Package + push chart
+        if: github.event_name != 'pull_request'
+        id: push
+        env:
+          VERSION: ${{ steps.chart.outputs.version }}
+        run: |
+          helm package "${CHART_PATH}" --destination /tmp
+          # Capture the OCI digest from `helm push` output so cosign
+          # can sign the immutable chart artifact, not the version
+          # tag (versions can be overwritten on the registry).
+          push_output=$(helm push "/tmp/${CHART_NAME}-${VERSION}.tgz" "oci://${CHART_REPO}" 2>&1 | tee /dev/stderr)
+          digest=$(echo "${push_output}" | awk -F': ' '/Digest:/ { print $2 }')
+          if [ -z "${digest}" ]; then
+            echo "::error::could not parse digest from helm push output"
+            exit 1
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
+
+      - name: Sign chart (keyless via Sigstore)
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          # The OCI artifact for the chart lives at the same path the
+          # `helm install oci://…` command pulls from, just signed
+          # by digest. ArgoCD's verification can then check the
+          # digest before sync.
+          cosign sign --yes "${CHART_REPO}/${CHART_NAME}@${DIGEST}"
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${CHART_REPO}/${CHART_NAME}@${DIGEST}"
