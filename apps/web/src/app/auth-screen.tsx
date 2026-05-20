@@ -51,17 +51,28 @@ export function AuthScreen() {
 			setState({ kind: "unsupported" });
 			return;
 		}
-		const stored = credentialStore.get();
-		setState(
-			stored ? { kind: "locked", credential: stored } : { kind: "fresh" },
-		);
+		// Bootstrap is async because the store is OPFS-backed (with a
+		// one-time migration from the legacy `localStorage` home).
+		// `cancelled` guards against StrictMode's double-mount and
+		// unmount-during-read.
+		let cancelled = false;
+		void (async () => {
+			const stored = await credentialStore.get();
+			if (cancelled) return;
+			setState(
+				stored ? { kind: "locked", credential: stored } : { kind: "fresh" },
+			);
+		})();
+		return () => {
+			cancelled = true;
+		};
 	}, []);
 
 	async function doEnroll() {
 		setState({ kind: "busy", what: "enrolling" });
 		try {
 			const result = await enroll();
-			credentialStore.set(result.credential);
+			await credentialStore.set(result.credential);
 			setState({
 				kind: "unlocked",
 				vault: result.vault,
@@ -97,7 +108,12 @@ export function AuthScreen() {
 	}
 
 	function doForget() {
-		credentialStore.clear();
+		// Fire-and-forget — the store clear is async but the UI
+		// transition shouldn't wait on it. A failure to delete is
+		// logged but doesn't block the user from re-enrolling.
+		void credentialStore.clear().catch((err) => {
+			console.warn("opfs-auth: failed to clear vault credential", err);
+		});
 		if (state.kind === "unlocked") state.vault.free();
 		setState({ kind: "fresh" });
 	}
