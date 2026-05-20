@@ -1,0 +1,77 @@
+# Knative `Service` for opfs-share-backend (ADR 0012).
+#
+# Single-replica scaling so the in-memory `RendezvousStore` stays
+# correct. When traffic grows enough to warrant >1 pod, swap the
+# store impl to Redis behind the same `RendezvousStore` trait and
+# bump `maxScale`.
+#
+# Placeholders the CI workflow substitutes before `kubectl apply`:
+#   ${IMAGE}           — the just-pushed container tag
+#   ${ALLOWED_ORIGINS} — comma-separated CORS allow-list
+#
+# Namespace is intentionally omitted; the deploy step passes
+# `kubectl apply -n <NAMESPACE>` (defaulting to whatever the
+# kubeconfig context resolves to). That keeps this manifest
+# portable across environments.
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: opfs-share-backend
+  labels:
+    app.kubernetes.io/name: opfs-share-backend
+    app.kubernetes.io/component: rendezvous-api
+spec:
+  template:
+    metadata:
+      annotations:
+        # Pin the replica count: the in-memory store is per-pod.
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "1"
+        # Ingress class intentionally not pinned. The cluster's
+        # Knative `config-network` configmap chooses the default
+        # (Istio / Kourier / Contour / …); hardcoding one here
+        # would deadlock `kubectl wait` on clusters that use a
+        # different ingress. Override per-Service via this
+        # annotation if a deployment really needs a specific one.
+    spec:
+      # Concurrency is bounded so a single pod doesn't fall over
+      # under burst — well above expected research traffic.
+      containerConcurrency: 100
+      timeoutSeconds: 30
+      containers:
+        - name: opfs-share-backend
+          image: ${IMAGE}
+          imagePullPolicy: Always
+          ports:
+            - name: http1
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: HOST
+              value: "0.0.0.0"
+            - name: ALLOWED_ORIGINS
+              value: ${ALLOWED_ORIGINS}
+            # `x-real-ip` is what Knative's Istio ingress sets to the
+            # immediate peer's IP. See the README + ADR 0011 for why
+            # we never read `X-Forwarded-For` directly.
+            - name: TRUSTED_IP_HEADER
+              value: "x-real-ip"
+            - name: RUST_LOG
+              value: "info,opfs_share_backend=debug"
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "500m"
+              memory: "128Mi"
+          # The binary is read-only; deny escalation explicitly even
+          # though the distroless image already runs as `nonroot`.
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
