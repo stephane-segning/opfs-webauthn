@@ -5,6 +5,16 @@ import { AuthCeremonyError, AuthUnsupportedError } from "./types.js";
 const PRF_SALT_LEN = 32;
 const USER_HANDLE_LEN = 16;
 const CHALLENGE_LEN = 32;
+/**
+ * Hard upper bound on a WebAuthn ceremony. Without `timeout`, an
+ * authenticator dialog that never appears (Linux without a security
+ * key, macOS Settings biometrics off, etc.) leaves the page in an
+ * unrecoverable "busy" state. 60 s is long enough for a human to
+ * comfortably authenticate, short enough that a stuck flow surfaces
+ * as a typed `AuthCeremonyError` (`NotAllowedError`) instead of a
+ * spinner the user can only escape by reloading.
+ */
+const CEREMONY_TIMEOUT_MS = 60_000;
 
 const PUBKEY_CRED_PARAMS: PublicKeyCredentialParameters[] = [
 	{ type: "public-key", alg: -7 }, // ES256
@@ -83,6 +93,12 @@ export async function enroll(options?: EnrollOptions): Promise<{
 		);
 	}
 
+	// Initialise wasm before the ceremony so the .wasm fetch is visible
+	// in DevTools the moment the user clicks Enroll, and a missing /
+	// corrupt artifact surfaces as a typed error before we burn the
+	// user's biometric on a flow that would have failed anyway.
+	await init();
+
 	const prfSalt = randomBytes(PRF_SALT_LEN);
 	// `Uint8Array<ArrayBufferLike>` -> `BufferSource` widening; the
 	// underlying buffer is an ArrayBuffer at runtime in every case we
@@ -104,6 +120,7 @@ export async function enroll(options?: EnrollOptions): Promise<{
 					residentKey: "required",
 					userVerification: "required",
 				},
+				timeout: CEREMONY_TIMEOUT_MS,
 				extensions: {
 					prf: { eval: { first: prfSalt } },
 				} as AuthenticationExtensionsClientInputs,
@@ -126,6 +143,7 @@ export async function enroll(options?: EnrollOptions): Promise<{
 					rpId,
 					allowCredentials: [{ type: "public-key", id: credential.rawId }],
 					userVerification: "required",
+					timeout: CEREMONY_TIMEOUT_MS,
 					extensions: {
 						prf: { eval: { first: prfSalt } },
 					} as AuthenticationExtensionsClientInputs,
@@ -145,7 +163,9 @@ export async function enroll(options?: EnrollOptions): Promise<{
 		);
 	}
 
-	await init();
+	// `init()` already ran at the head of this function; calling it
+	// twice is idempotent — the wasm-bindgen entry returns the cached
+	// module on every call past the first.
 	const enrollResult = CryptoVault.enroll(prfOutput, prfSalt);
 	try {
 		const persisted: VaultCredential = {
@@ -181,6 +201,10 @@ export async function unlock({
 		);
 	}
 
+	// See the matching note in `enroll` — init first so wasm-load
+	// failure surfaces before the WebAuthn ceremony.
+	await init();
+
 	const challenge = randomBytes(CHALLENGE_LEN);
 	const assertion = (await runCeremony("passkey assertion", () =>
 		navigator.credentials.get({
@@ -191,6 +215,7 @@ export async function unlock({
 					{ type: "public-key", id: credential.credentialId as BufferSource },
 				],
 				userVerification: "required",
+				timeout: CEREMONY_TIMEOUT_MS,
 				extensions: {
 					prf: { eval: { first: credential.prfSalt } },
 				} as AuthenticationExtensionsClientInputs,
@@ -207,7 +232,6 @@ export async function unlock({
 		);
 	}
 
-	await init();
 	return CryptoVault.unlock(
 		prfOutput,
 		credential.prfSalt,
