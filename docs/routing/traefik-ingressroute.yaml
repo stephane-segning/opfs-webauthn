@@ -1,0 +1,122 @@
+# Traefik IngressRoute — same-origin routing for opfs-webauthn
+# (ADR 0014).
+#
+# Topology this assumes:
+#
+#     internet ─→ Traefik (TLS + path routing + Host rewrite)
+#                    │
+#                    ▼
+#              Kourier (knative-serving namespace, default
+#              networking layer installed by KnativeServing
+#              operator)
+#                    │
+#         ┌──────────┴───────────┐
+#         ▼                      ▼
+#     opfs-web KSvc        opfs-share-backend KSvc
+#
+# Why the indirection: KnativeServing's networking layer (Kourier
+# here; could be Istio in other clusters) routes to the right
+# Revision pod **by `Host` header**. The Host header that arrives
+# in Traefik is `ocs.vaam.store`, which Kourier doesn't recognize
+# — Knative built its routes from the cluster-local DNS name
+# (`<name>.<namespace>.svc.cluster.local`).
+#
+# So the routing manifest needs to do three things:
+#   1. Match the public host.
+#   2. Pick the right backend by path.
+#   3. **Rewrite `Host`** on the way to Kourier so the right
+#      KSvc Revision picks the request up.
+#
+# Step 3 is the part you don't see in HTTPRoute / VirtualService
+# examples — there, the routing layer IS the Knative networking
+# layer, and the rewrite is implicit. With Traefik in front of
+# Kourier we have to do it explicitly.
+
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: opfs-webauthn
+  namespace: opfs
+spec:
+  entryPoints:
+    # `websecure` is Traefik's conventional :443 entrypoint.
+    # Adjust if your install names it differently.
+    - websecure
+  routes:
+    # `/api/*` lands here first. Traefik picks the higher-priority
+    # rule when two rules match — explicit `priority` removes any
+    # ambiguity about whose order it is (the longer-PathPrefix
+    # rule wins by default, but being explicit costs nothing).
+    - match: Host(`ocs.vaam.store`) && PathPrefix(`/api`)
+      kind: Rule
+      priority: 100
+      services:
+        - name: kourier
+          namespace: knative-serving
+          port: 80
+          # `passHostHeader: true` lets the Host-rewrite middleware
+          # below actually set the value Kourier sees. With `false`
+          # Traefik would override it to the destination service
+          # name, which isn't what Knative routes on.
+          passHostHeader: true
+      middlewares:
+        - name: opfs-api-stripprefix
+        - name: opfs-api-host
+    # Catch-all → static frontend. Lower priority so `/api/*`
+    # never falls through here.
+    - match: Host(`ocs.vaam.store`)
+      kind: Rule
+      priority: 10
+      services:
+        - name: kourier
+          namespace: knative-serving
+          port: 80
+          passHostHeader: true
+      middlewares:
+        - name: opfs-web-host
+  tls:
+    # Hook this up to your cert-resolver (cert-manager via
+    # `Certificate` + `secretName`, ACME via Traefik's own
+    # resolver, etc.). The TLS termination is at THIS layer; the
+    # request inside the cluster is plain HTTP to Kourier.
+    certResolver: letsencrypt
+---
+# Strip the `/api` mount point so the backend's routes
+# (`/rendezvous`, `/rendezvous/:code`, …) stay prefix-free. The
+# rendezvous backend doesn't know it's mounted at `/api`; moving
+# it later (`/v1/api`, `/share`, …) only touches this manifest.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: opfs-api-stripprefix
+  namespace: opfs
+spec:
+  stripPrefix:
+    prefixes:
+      - /api
+---
+# Host rewrite for the `/api/*` route. Kourier matches Knative
+# Routes against the request's Host header; the cluster-local
+# DNS name of the KSvc is what Knative built its route for, so
+# that's what Host must be by the time the request reaches
+# Kourier.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: opfs-api-host
+  namespace: opfs
+spec:
+  headers:
+    customRequestHeaders:
+      Host: opfs-share-backend.opfs.svc.cluster.local
+---
+# Same idea for the frontend route.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: opfs-web-host
+  namespace: opfs
+spec:
+  headers:
+    customRequestHeaders:
+      Host: opfs-web.opfs.svc.cluster.local

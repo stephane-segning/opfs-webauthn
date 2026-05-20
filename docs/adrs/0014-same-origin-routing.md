@@ -61,11 +61,26 @@ Concretely:
   prefix-free. The ingress URL-rewrite strips `/api` so the
   backend doesn't need to know where it's mounted.
 - Reference routing manifests live in
-  [`docs/routing/`](../routing/) for Gateway API (`HTTPRoute`)
-  and classic Istio (`VirtualService`). Neither is packaged
-  inside the Helm charts: the routing layer is cluster-specific
-  and we don't want to force an ingress implementation on
-  consumers.
+  [`docs/routing/`](../routing/) covering three shapes:
+  - `traefik-ingressroute.yaml` — the topology this project
+    uses in production: Traefik at the cluster edge forwarding
+    to Kourier (the default networking layer installed by the
+    KnativeServing operator). Traefik terminates TLS, picks
+    backends by path, and **rewrites the `Host` header** to the
+    KSvc's cluster-local DNS name so Kourier routes to the
+    right Revision pod.
+  - `httproute.yaml` — Gateway API HTTPRoute, the
+    forward-compatible default for any conformant gateway
+    (Traefik v3+, Cilium Gateway, Envoy Gateway, Contour).
+    Doesn't need the Host rewrite because Gateway API is itself
+    a Knative-supported networking layer.
+  - `istio-virtualservice.yaml` — Knative on Istio with the
+    classic VirtualService model. Same "is the networking
+    layer" property — no Host rewrite needed.
+
+  None of the three is packaged inside the Helm charts: the
+  routing layer is cluster-specific and we don't want to force
+  an ingress implementation on consumers.
 
 Cross-origin overrides remain supported. Setting
 `NEXT_PUBLIC_SHARE_BACKEND_URL=https://staging-api.example`
