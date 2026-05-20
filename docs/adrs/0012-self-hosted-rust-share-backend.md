@@ -53,15 +53,29 @@ deployed on Kubernetes via Knative.
 - **CORS** is a hand-rolled middleware over an `ALLOWED_ORIGINS`
   env var. Allow-list enforced before any handler runs, matching
   the Worker's behaviour the client already expects.
-- **Container**: multi-stage Dockerfile with `cargo-chef` for
-  layer caching; the runtime image is `gcr.io/distroless/cc` so
-  the published artifact is ~15 MiB and has no shell.
-- **Deploy**: a Knative `Service` manifest that pins
-  `containerConcurrency: 100` and `autoscaling.knative.dev/
-  maxScale: "1"` for the in-memory store. The CI workflow builds
-  the image, pushes to the registry, and `kubectl apply`s the
-  manifest. (The Dockerfile + manifests + CI land in the
-  follow-up PR; this ADR locks in the architectural choice.)
+- **Container**: multi-stage Dockerfile, runtime image is
+  `gcr.io/distroless/cc:nonroot` so the published artifact is
+  ~50 MiB and has no shell (the `cc` flavour bundles libssl/
+  libcrypto, which is the difference vs the ~15 MiB scratch
+  variant). Layer caching is delegated to the buildx GHA cache;
+  `cargo-chef` was tempting but its current release requires
+  Rust 1.88+ and our workspace MSRV is 1.85.
+- **Deploy model**: GitOps via ArgoCD. **CI never touches the
+  cluster.** The build workflow's job is to produce an image
+  ArgoCD can trust:
+    1. `docker build + push` to GHCR (both `:latest` and
+       `:<git-sha>`).
+    2. `cosign sign --yes` the image **keylessly** via Sigstore
+       (Fulcio + Rekor, OIDC token from the workflow). No private
+       key material to manage; the signing identity is the
+       repository's GitHub Actions workflow.
+    3. `cosign verify` immediately after, asserting the
+       just-published image carries our signature.
+  ArgoCD reconciles the Knative `Service` from
+  `apps/share-backend/k8s/`. The Image Updater annotations on the
+  ArgoCD `Application` (see `k8s/argocd-application.example.yaml`)
+  pin specific signed digests as new builds land, so the
+  committed manifest stays at `:latest` without churn.
 
 ### What stays the same
 
@@ -85,7 +99,8 @@ deployed on Kubernetes via Knative.
 | Rate limit | KV counter (best-effort) | In-memory counter (best-effort) |
 | Hard rate enforcement | Cloudflare zone WAF | Ingress / k8s NetworkPolicy |
 | Commitment derivation | JS port pinned to Rust | Single Rust crate, end-to-end |
-| Deploy auth | `CLOUDFLARE_API_TOKEN` | k8s kubeconfig / OIDC |
+| Deploy auth | `CLOUDFLARE_API_TOKEN` | ArgoCD GitOps; CI signs the image via Sigstore OIDC |
+| Image trust | implicit (CF runtime) | `cosign` keyless signature + Rekor transparency log |
 
 ## Consequences
 
@@ -102,9 +117,10 @@ deployed on Kubernetes via Knative.
   backend README.
 - **Multi-replica**: capped at one until the storage layer moves to
   Redis. Knative's autoscaler keeps this honest via `maxScale: "1"`.
-- **CI**: gains a Docker build + `kubectl apply` step in a new
-  workflow that gracefully skips when the cluster credentials
-  aren't set (matches the existing share-backend-deploy pattern).
+- **CI**: builds the image, pushes to GHCR, signs with Sigstore.
+  `id-token: write` is required for the OIDC handshake against
+  Fulcio. No cluster credentials in the repo at all — that
+  surface lives with the ArgoCD install, not here.
 - **Removed**: `wrangler`, the CF KV namespace, the R2 bucket, the
   `apps/share-backend/` TS package. Done in a follow-up PR once the
   Rust service is live so we never have a window with no working

@@ -62,44 +62,45 @@ The frontend lives at **`https://ocs.vaam.store`** (GitHub Pages
 finds it via the `NEXT_PUBLIC_SHARE_BACKEND_URL` build-time
 variable.
 
-Repo-level config that needs setting once:
+### Pipeline shape (CI vs. ArgoCD)
 
-| Where | Name | Value |
+The split is GitOps-strict: **CI never touches the cluster.**
+
+- **`.github/workflows/deploy-share-backend.yml`** builds the
+  multi-stage Dockerfile (~50 MiB distroless image), pushes to
+  GHCR (`ghcr.io/<owner>/opfs-share-backend:latest` +
+  `:<git-sha>`), and **signs** each image with `cosign` keyless
+  via Sigstore. The GH Actions OIDC token is exchanged for a
+  short-lived Fulcio cert and the signature lands in the Rekor
+  transparency log — no private key material to manage.
+- **ArgoCD** reconciles the manifests under `apps/share-backend/k8s/`
+  on its own cadence. The `kustomization.yaml` next to
+  `service.yaml` is the base; environment overlays (or ArgoCD
+  Image Updater) pin specific signed digests at sync time.
+- See `apps/share-backend/k8s/argocd-application.example.yaml` for
+  a ready-to-adapt `Application` with Image Updater + cosign
+  verification annotations.
+
+Permissions the workflow requires (already set in the workflow file):
+
+- `contents: read`
+- `packages: write` (push to GHCR)
+- `id-token: write` (cosign keyless via Sigstore)
+
+No `KUBE_CONFIG` secret is needed; the cluster credentials live
+with the ArgoCD install, not this repo.
+
+### Manifest defaults
+
+The committed manifest is applyable as-is — the only knobs are
+its env vars, which carry the production defaults:
+
+| Env var | Default | Notes |
 | --- | --- | --- |
-| Repository variable (Pages build) | `NEXT_PUBLIC_SHARE_BACKEND_URL` | `https://api.ocs.vaam.store` |
-| Knative manifest / Deployment env | `ALLOWED_ORIGINS` | `https://ocs.vaam.store` (comma-separated for additional origins) |
-| Knative manifest / Deployment env | `TRUSTED_IP_HEADER` | `x-real-ip` — required for per-IP rate limiting. Without it the limiter degrades to a single global bucket. We never read `X-Forwarded-For` directly (client-controllable first hop). |
-| Knative manifest / Deployment env | `PORT` | `8080` (default, matches the binary) |
+| `ALLOWED_ORIGINS` | `https://ocs.vaam.store` | Comma-separated; override per env via a Kustomize patch. |
+| `TRUSTED_IP_HEADER` | `x-real-ip` | Required for per-IP rate limiting. Never read `X-Forwarded-For` directly (client-controllable first hop). |
+| `PORT` | `8080` | Matches the binary default. |
 
-Manifests + CI workflow live in:
-
-- `Dockerfile` — multi-stage build, distroless
-  `cc-debian12:nonroot` runtime (~50 MiB; the `cc` flavor bundles
-  libssl/libcrypto). Layer caching delegated to the workflow's
-  buildx GHA cache instead of `cargo-chef`, which has an MSRV
-  conflict with our pinned 1.85 toolchain.
-- `k8s/service.yaml` — Knative `Service` with
-  `containerConcurrency: 100`, `maxScale: 1` (single replica so
-  the in-memory store stays correct), a read-only root filesystem,
-  and conservative resource requests.
-- `.github/workflows/deploy-share-backend.yml` — on push to
-  `main` touching `apps/share-backend/**`, `crates/crypto/**`,
-  or `Cargo.toml/lock`: builds + pushes the image to GHCR, applies
-  the manifest, and `kubectl wait`s for `Ready=True`. Skips
-  gracefully when `KUBE_CONFIG` isn't set so fork CI stays green.
-
-Secrets / variables the workflow expects:
-
-- `KUBE_CONFIG` (**secret**) — `base64 -w0` of a kubeconfig with
-  permission to manage the `serving.knative.dev/v1` `Service` in
-  the target namespace.
-- `KNATIVE_NAMESPACE` (**variable**, optional) — namespace to
-  deploy into. Defaults to `default`. Applied via `kubectl -n`;
-  the manifest itself omits `metadata.namespace` so it ports
-  cleanly across environments.
-- `ALLOWED_ORIGINS` (**variable**, optional) — comma-separated
-  CORS allow-list substituted into the manifest at deploy time.
-  Defaults to `https://ocs.vaam.store`.
-
-The image is published at `ghcr.io/<owner>/opfs-share-backend`,
-tagged `:latest` and `:<git-sha>`.
+The frontend reads **`NEXT_PUBLIC_SHARE_BACKEND_URL`** at build
+time; set it to `https://api.ocs.vaam.store` as a repo variable
+when the cluster + ingress are live.
