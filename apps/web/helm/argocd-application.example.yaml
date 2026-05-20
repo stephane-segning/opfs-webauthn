@@ -36,14 +36,25 @@ metadata:
     # `write-back-target` point at the GitOps repo / file that
     # holds the per-env values overlay. Adjust both for your repo
     # layout.
+    #
+    # `git-credentials` reuses the same GitHub App secret ArgoCD
+    # itself authenticates with (the `argocd.argoproj.io/secret-type:
+    # repo-creds` label tells both controllers to pick it up). The
+    # App must have `Contents: read & write` on the GitOps repo for
+    # this push to succeed — `read` alone (enough for source-fetch)
+    # silently fails on write-back.
+    #
+    # Note: `git-repository` MUST be HTTPS, not SSH. GitHub App
+    # auth mints short-lived installation tokens used as HTTPS
+    # basic-auth; the SSH path bypasses that entirely.
     argocd-image-updater.argoproj.io/write-back-method: git
     argocd-image-updater.argoproj.io/git-branch: main
     argocd-image-updater.argoproj.io/git-repository: >-
-      git@github.com:stephane-segning/opfs-webauthn-gitops.git
+      https://github.com/stephane-segning/opfs-webauthn-gitops.git
     argocd-image-updater.argoproj.io/write-back-target: >-
       helmvalues:envs/production/opfs-web.values.yaml
     argocd-image-updater.argoproj.io/git-credentials: >-
-      secret:argocd/opfs-webauthn-deploy
+      secret:argocd/github-app-creds--stephane-segning
 spec:
   project: default
   source:
@@ -54,6 +65,15 @@ spec:
     # source is never published. Track the latest patch with a
     # glob, or pin to a specific run for a frozen release.
     targetRevision: 0.1.*
+    helm:
+      # **Must be set per cluster.** The chart default is empty,
+      # which renders `window.__OPFS_CONFIG__.shareBackendUrl = ""`
+      # and silently hides the share UI (ADR 0014). Point this at
+      # the Knative-assigned URL of the share-backend KSvc in the
+      # same cluster — `opfs-share-backend.<ns>.<config-domain>`.
+      values: |
+        env:
+          shareBackendUrl: https://opfs-share-backend.opfs.example.com
   destination:
     server: https://kubernetes.default.svc
     namespace: opfs
