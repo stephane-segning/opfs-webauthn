@@ -22,7 +22,6 @@
 		"@opfs/core-wasm": "workspace:*"
 	},
 	"devDependencies": {
-		"@opfs/share-backend": "workspace:*",
 		"typescript": "^5.8.2",
 		"vitest": "^2.1.0"
 	}
