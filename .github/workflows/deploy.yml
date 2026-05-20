@@ -65,7 +65,15 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Build static export (Turbo also runs @opfs/core-wasm#build)
+      # The next step runs `next build` directly via the
+      # `@opfs/web#build` script — that bypasses Turbo, so the wasm
+      # artifact `packages/core-wasm/dist/opfs_core.js` is not built
+      # transitively. Build it explicitly first; matches what ci.yml
+      # already does before its typecheck step.
+      - name: Build wasm artifact (gates the static export)
+        run: pnpm --filter @opfs/core-wasm build
+
+      - name: Build static export
         run: pnpm --filter @opfs/web build
 
       - name: Upload Pages artifact
