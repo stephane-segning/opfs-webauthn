@@ -34,7 +34,7 @@
 		},
 		"unlocked": {
 			"title": "Vault open.",
-			"blurb": "Notes UI lands in the next PR. For now this proves the WebAuthn PRF → wasm CryptoVault chain works end-to-end.",
+			"blurb": "Your notes are ready.",
 			"lock": "Lock vault"
 		},
 		"error": {
@@ -49,7 +49,11 @@
 			"lock": "Lock",
 			"new": "New note",
 			"receive": "Receive a note",
-			"loading": "Opening your vault…"
+			"loading": "Opening your vault…",
+			"searchPlaceholder": "Search notes…",
+			"searchLabel": "Search notes",
+			"showArchived": "Show archived",
+			"hideArchived": "Hide archived"
 		},
 		"list": {
 			"region": "Notes"

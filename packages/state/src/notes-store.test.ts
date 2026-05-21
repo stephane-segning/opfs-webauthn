@@ -1,8 +1,8 @@
 /**
  * Notes-store tests. We drive the store against an in-process fake
  * `Repo` so the assertions cover the orchestration: initial load,
- * tx-applied reload, upsert + archive delegation, and the
- * last-writer-wins generation guard.
+ * tx-applied reload, upsert + archive delegation, showArchived toggle,
+ * and the last-writer-wins generation guard.
  */
 
 import type { ListPage, Note, NoteInput, Repo } from "@opfs/storage";
@@ -10,19 +10,27 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { createNotesStore } from "./notes-store.js";
 
-type ListOpts = { limit?: number; cursor?: string | null };
+type ListOpts = {
+	limit?: number;
+	cursor?: string | null;
+	includeArchived?: boolean;
+};
 
 class FakeRepo {
+	/** All notes, including archived ones. */
 	#notes: Note[] = [];
 	#listeners = new Set<(ids: readonly string[]) => void>();
 
 	async listNotes(opts: ListOpts = {}): Promise<ListPage> {
-		const limit = opts.limit ?? this.#notes.length;
+		const visible = opts.includeArchived
+			? this.#notes
+			: this.#notes.filter((n) => !n.archived);
+		const limit = opts.limit ?? visible.length;
 		const cursor = opts.cursor ?? null;
 		const start = cursor ? Number.parseInt(cursor, 10) : 0;
-		const end = Math.min(start + limit, this.#notes.length);
-		const notes = this.#notes.slice(start, end);
-		const nextCursor = end < this.#notes.length ? String(end) : null;
+		const end = Math.min(start + limit, visible.length);
+		const notes = visible.slice(start, end);
+		const nextCursor = end < visible.length ? String(end) : null;
 		return { notes, nextCursor };
 	}
 
@@ -43,7 +51,9 @@ class FakeRepo {
 	}
 
 	async archiveNote(id: string): Promise<void> {
-		this.#notes = this.#notes.filter((n) => n.id !== id);
+		this.#notes = this.#notes.map((n) =>
+			n.id === id ? { ...n, archived: true } : n,
+		);
 		queueMicrotask(() => this.#fire([id]));
 	}
 
@@ -81,6 +91,65 @@ describe("createNotesStore", () => {
 		unsubscribe();
 	});
 
+	it("showArchived defaults to false", async () => {
+		const { store, unsubscribe } = createNotesStore(asRepo(fake));
+		await settle();
+		expect(store.getState().showArchived).toBe(false);
+		unsubscribe();
+	});
+
+	it("setShowArchived true reveals archived notes", async () => {
+		await fake.upsertNote({ title: "visible", body: "" });
+		await fake.upsertNote({ title: "archived", body: "" });
+		const { store, unsubscribe } = createNotesStore(asRepo(fake));
+		await settle();
+		// Archive the second note.
+		await store.getState().archive("id-2");
+		await settle();
+
+		// Default: archived note is hidden.
+		let state = store.getState().state;
+		expect(state.status).toBe("ready");
+		if (state.status === "ready") {
+			expect(state.notes.map((n) => n.title)).toEqual(["visible"]);
+		}
+
+		// Toggle on — reload includes archived.
+		store.getState().setShowArchived(true);
+		await settle();
+		state = store.getState().state;
+		expect(state.status).toBe("ready");
+		if (state.status === "ready") {
+			const titles = state.notes.map((n) => n.title);
+			expect(titles).toContain("visible");
+			expect(titles).toContain("archived");
+		}
+
+		// Toggle off — archived note disappears again.
+		store.getState().setShowArchived(false);
+		await settle();
+		state = store.getState().state;
+		if (state.status === "ready") {
+			expect(state.notes.map((n) => n.title)).toEqual(["visible"]);
+		}
+		unsubscribe();
+	});
+
+	it("setShowArchived with the same value is a no-op (no extra reload)", async () => {
+		const { store, unsubscribe } = createNotesStore(asRepo(fake));
+		await settle();
+		let listCallCount = 0;
+		const original = fake.listNotes.bind(fake);
+		fake.listNotes = async (opts) => {
+			listCallCount += 1;
+			return original(opts);
+		};
+		store.getState().setShowArchived(false); // already false
+		await settle();
+		expect(listCallCount).toBe(0);
+		unsubscribe();
+	});
+
 	it("upsert delegates to the repo and tx-applied triggers a reload", async () => {
 		const { store, unsubscribe } = createNotesStore(asRepo(fake));
 		await settle();
@@ -95,7 +164,7 @@ describe("createNotesStore", () => {
 		unsubscribe();
 	});
 
-	it("archive removes the note via the repo and reloads", async () => {
+	it("archive hides the note from the default (showArchived=false) view", async () => {
 		await fake.upsertNote({ title: "doomed", body: "" });
 		const { store, unsubscribe } = createNotesStore(asRepo(fake));
 		await settle();

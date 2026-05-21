@@ -207,6 +207,42 @@ body {
 	margin-right: auto;
 }
 
+.notes-toolbar-archived {
+	font-size: 0.8rem;
+	opacity: 0.7;
+}
+
+.notes-toolbar-archived[aria-pressed="true"] {
+	opacity: 1;
+	color: var(--accent-base);
+}
+
+.notes-search-row {
+	margin-bottom: var(--space-3);
+}
+
+.notes-search {
+	width: 100%;
+	padding: var(--space-2) var(--space-3);
+	background: var(--surface-1);
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-md);
+	color: var(--text-primary);
+	font-size: 0.875rem;
+	line-height: 1.5;
+	outline: none;
+	transition: border-color var(--motion-fast);
+}
+
+.notes-search:focus {
+	border-color: var(--accent-base);
+	box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.notes-search::placeholder {
+	color: var(--text-muted);
+}
+
 .notes-list {
 	list-style: none;
 	margin: 0;

@@ -3,7 +3,7 @@
 import type { CryptoVault } from "@opfs/core-wasm";
 import type { Note, Repo } from "@opfs/storage";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import type { SharedNote } from "../share/note-codec";
 import { ReceiveShareDialog } from "../share/receive-dialog";
@@ -97,6 +97,20 @@ type ShareDialog =
 
 const NO_DIALOG: ShareDialog = { kind: "none" };
 
+/**
+ * Filter `notes` by a free-text query over title + body.
+ * Empty/whitespace query returns the full list unchanged (reference-
+ * stable so React skips re-renders of the child list component).
+ */
+function applySearch(notes: readonly Note[], query: string): readonly Note[] {
+	const q = query.trim().toLowerCase();
+	if (!q) return notes;
+	return notes.filter(
+		(n) =>
+			n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q),
+	);
+}
+
 function NotesView({
 	repo,
 	t,
@@ -105,10 +119,23 @@ function NotesView({
 	readonly onLock: () => void;
 	readonly t: ReturnType<typeof useTranslations>;
 }) {
-	const { state } = useNotes(repo);
+	const { state, snapshot } = useNotes(repo);
 	const [selection, setSelection] = useState<Selection>(NO_SELECTION);
 	const [share, setShare] = useState<ShareDialog>(NO_DIALOG);
+	const [query, setQuery] = useState("");
 	const shareConfig = getShareConfig();
+
+	const { showArchived, setShowArchived } = snapshot;
+
+	// All hooks must run unconditionally before any early returns.
+	const allNotes = state.status === "ready" ? state.notes : [];
+	const visibleNotes = useMemo(
+		() => applySearch(allNotes, query),
+		// applySearch is a stable reference outside the component;
+		// the only inputs that matter are allNotes and query.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[allNotes, query],
+	);
 
 	async function saveDraft(draft: {
 		id?: string;
@@ -160,7 +187,6 @@ function NotesView({
 		);
 	}
 
-	const notes = state.status === "ready" ? state.notes : [];
 	return (
 		<>
 			<div className="notes-toolbar">
@@ -180,6 +206,24 @@ function NotesView({
 						{t("shell.receive")}
 					</button>
 				) : null}
+				<button
+					aria-pressed={showArchived}
+					className="auth-link notes-toolbar-archived"
+					onClick={() => setShowArchived(!showArchived)}
+					type="button"
+				>
+					{showArchived ? t("shell.hideArchived") : t("shell.showArchived")}
+				</button>
+			</div>
+			<div className="notes-search-row">
+				<input
+					aria-label={t("shell.searchLabel")}
+					className="notes-search"
+					onChange={(e) => setQuery(e.target.value)}
+					placeholder={t("shell.searchPlaceholder")}
+					type="search"
+					value={query}
+				/>
 			</div>
 			{state.status === "loading" ? (
 				<LoadingBody />
@@ -189,7 +233,7 @@ function NotesView({
 				</p>
 			) : (
 				<NotesList
-					notes={notes}
+					notes={visibleNotes}
 					onOpen={(note) => setSelection({ kind: "draft", note })}
 				/>
 			)}
