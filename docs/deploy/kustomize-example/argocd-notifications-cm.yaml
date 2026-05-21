@@ -1,0 +1,125 @@
+# argocd-notifications config.
+#
+# **Replaces** the empty `argocd-notifications-cm` that ships with
+# the ArgoCD install — if you already have other notifications
+# (Slack tokens, email recipients, etc.) configured in this CM,
+# merge those `data:` entries into this file before applying.
+#
+# The GitHub Deployments side uses the same App you've already
+# wired up for repo-creds. The notifications controller reads the
+# App private key from `argocd-notifications-secret` via the
+# `$github-privateKey` reference — that Secret has to be created
+# out-of-band; see ../README.md.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-notifications-cm
+  namespace: argocd
+data:
+  # ArgoCD UI URL — shows up as the `logURL` on each GitHub
+  # Deployment so reviewers can jump from the green-rocket badge
+  # to the sync run that produced it.
+  context: |
+    argocdUrl: https://argocd.example.com
+
+  # ─── GitHub Deployments service ────────────────────────────────
+  # Uses the same App as the repo-creds Secret. App must have
+  # `Deployments: read & write` on the source repo (separate from
+  # the `Contents: read` you already granted for source-fetch).
+  service.github: |
+    appID: 2926172
+    installationID: 111820839
+    privateKey: $github-privateKey
+
+  # ─── Templates ─────────────────────────────────────────────────
+  # `app-deployed` creates / updates a GitHub Deployment for the
+  # synced commit. The notifications controller hits the API
+  # twice: `POST /repos/.../deployments` to create the Deployment
+  # object, then `POST .../statuses` with state=success and the
+  # environmentURL we set here.
+  template.app-deployed: |
+    message: |
+      Application {{.app.metadata.name}} is synced and healthy.
+    github:
+      # `repoURLPath` and `revisionPath` are Go template
+      # expressions evaluated against `.app`. They have to return
+      # *strings*; an unquoted YAML token would be parsed as a
+      # path. Both knobs below resolve to literals via the
+      # `{{ "string" }}` template form — the dynamic alternatives
+      # are wrong for this Application'a shape:
+      #
+      #   * `.app.spec.source.repoURL` is the OCI Helm registry
+      #     (`ghcr.io/stephane-segning/charts`), not a GitHub repo
+      #     — the GitHub service would 404 trying to POST a
+      #     Deployment there.
+      #   * `.app.status.operationState.syncResult.revision` is
+      #     the chart's OCI digest (`sha256:...`), which GitHub's
+      #     Deployments API rejects as `ref`. The clean way to
+      #     anchor per-commit would be to surface the chart's
+      #     `AppVersion` (the short SHA) in `app.status`, but
+      #     ArgoCD doesn't expose it there; resolving it would
+      #     require a webhook listener.
+      #
+      # Anchoring at `main` accepts that the Deployment points
+      # at "head of main at sync time" rather than a specific
+      # commit. For per-app URL + Environment surfacing — what
+      # the GitHub UI cares about — that's enough.
+      repoURLPath: '{{ "https://github.com/stephane-segning/opfs-webauthn" }}'
+      revisionPath: '{{ "main" }}'
+      deployment:
+        # The Environment shown in the GitHub UI. Per-app, so
+        # opfs-web and opfs-share-backend get separate entries.
+        environment: '{{.app.metadata.name}}'
+        # Pulled from the per-Application annotation set by the
+        # patch files.
+        environmentURL: '{{index .app.metadata.annotations "opfs.vaam.store/url"}}'
+        # Link back into the ArgoCD UI for this Application.
+        logURL: '{{.context.argocdUrl}}/applications/{{.app.metadata.name}}'
+        # `success` for healthy syncs; the failed-template flips
+        # this to `failure` (see below).
+        state: success
+        # `requiredContexts: []` disables GitHub's branch-protection
+        # gate so the Deployment is recorded immediately.
+        requiredContexts: []
+        autoMerge: false
+        # Set true if you want previews / per-PR environments —
+        # GitHub auto-removes the Environment when the underlying
+        # ref is deleted.
+        transientEnvironment: false
+
+  # `app-deployed-failed` posts state=failure when sync errored or
+  # the app is reporting Degraded/Missing. Same surface, different
+  # status string.
+  template.app-deployed-failed: |
+    message: |
+      Application {{.app.metadata.name}} sync failed or app is unhealthy.
+    github:
+      repoURLPath: '{{ "https://github.com/stephane-segning/opfs-webauthn" }}'
+      revisionPath: '{{ "main" }}'
+      deployment:
+        environment: '{{.app.metadata.name}}'
+        environmentURL: '{{index .app.metadata.annotations "opfs.vaam.store/url"}}'
+        logURL: '{{.context.argocdUrl}}/applications/{{.app.metadata.name}}'
+        state: failure
+        requiredContexts: []
+        autoMerge: false
+        transientEnvironment: false
+
+  # ─── Triggers ──────────────────────────────────────────────────
+  # `oncePer: app.status.sync.revision` makes sure we don't spam
+  # GitHub with one Deployment per reconcile — only one per commit.
+  trigger.on-deployed: |
+    - description: Application is synced and healthy. Once per commit.
+      oncePer: app.status.sync.revision
+      send: [app-deployed]
+      when: app.status.operationState.phase in ['Succeeded']
+              and app.status.health.status == 'Healthy'
+
+  # No `oncePer` on failure — every fresh failure should re-stamp,
+  # so the GitHub Environment doesn't lie about a transient red.
+  trigger.on-deploy-failed: |
+    - description: Sync failed or app went unhealthy.
+      send: [app-deployed-failed]
+      when: app.status.operationState.phase in ['Error', 'Failed']
+              or app.status.health.status in ['Degraded', 'Missing']

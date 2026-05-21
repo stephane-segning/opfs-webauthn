@@ -1,0 +1,39 @@
+# Reference kustomize overlay for deploying opfs-webauthn via
+# ArgoCD with GitHub Deployments notifications wired up.
+#
+# Drop into your GitOps repo, fork the placeholder strings to your
+# cluster's URLs / GitOps repo / App credentials, and apply.
+#
+# The two `Application` manifests come from the published example
+# YAMLs on `main`; everything else here patches them or stands up
+# the notifications surface around them.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+resources:
+  # Upstream Application examples. Pull from a pinned tag if you
+  # want immutability — `main` follows the head and may break under
+  # you on a chart-schema rev.
+  - https://raw.githubusercontent.com/stephane-segning/opfs-webauthn/refs/heads/main/apps/web/helm/argocd-application.example.yaml
+  - https://raw.githubusercontent.com/stephane-segning/opfs-webauthn/refs/heads/main/apps/share-backend/helm/argocd-application.example.yaml
+  # The notifications ConfigMap lives here; the matching Secret with
+  # the GitHub App private key has to be applied separately (see
+  # README.md — it can't live in plaintext in a GitOps repo).
+  - argocd-notifications-cm.yaml
+
+patches:
+  - target:
+      group: argoproj.io
+      version: v1alpha1
+      kind: Application
+      name: opfs-web
+    path: opfs-web.patch.yaml
+  - target:
+      group: argoproj.io
+      version: v1alpha1
+      kind: Application
+      name: opfs-share-backend
+    path: opfs-share-backend.patch.yaml
