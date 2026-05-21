@@ -1,9 +1,23 @@
 {
 	"name": "@opfs/share-client",
 	"version": "0.1.0",
-	"private": true,
 	"description": "Page-side client for the recipient-first share rendezvous: HTTP transport + WASM seal/open orchestration (ADR 0007).",
 	"license": "MIT",
+	"author": "Stephane Segning <stephane.segning@gmail.com>",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/stephane-segning/opfs-webauthn.git",
+		"directory": "packages/share-client"
+	},
+	"homepage": "https://github.com/stephane-segning/opfs-webauthn/tree/main/packages/share-client#readme",
+	"bugs": "https://github.com/stephane-segning/opfs-webauthn/issues",
+	"keywords": [
+		"webauthn",
+		"share",
+		"rendezvous",
+		"x25519",
+		"local-first"
+	],
 	"type": "module",
 	"exports": {
 		".": {
@@ -12,11 +26,25 @@
 		}
 	},
 	"files": [
-		"src"
+		"dist",
+		"README.md"
 	],
+	"publishConfig": {
+		"access": "public",
+		"provenance": true,
+		"exports": {
+			".": {
+				"types": "./dist/index.d.ts",
+				"import": "./dist/index.js"
+			}
+		}
+	},
 	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"clean": "rm -rf dist",
 		"test": "vitest run",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"prepublishOnly": "pnpm run clean && pnpm run build"
 	},
 	"dependencies": {
 		"@opfs/core-wasm": "workspace:*"

@@ -13,6 +13,8 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/stephane-segning/opfs-webauthn"
+homepage = "https://github.com/stephane-segning/opfs-webauthn"
+authors = ["Stephane Segning <stephane.segning@gmail.com>"]
 rust-version = "1.85"
 
 [workspace.lints.rust]
@@ -51,6 +53,16 @@ thiserror = { version = "2.0", default-features = false }
 # Dev / test
 hex-literal = "0.4"
 hex = "0.4"
+
+# Internal crates — single source of truth for the version when
+# the dependents go to crates.io. `version.workspace = true` on
+# each crate `[package]` keeps the workspace `version` aligned;
+# repeating it here means a workspace-wide bump (root Cargo.toml
+# `[workspace.package].version`) flows into the inter-crate dep
+# resolution automatically. Local workspace builds prefer the
+# `path` over the version registry hit; crates.io builds use
+# the version.
+opfs-crypto = { version = "0.1.0", path = "crates/crypto" }
 
 [profile.release]
 opt-level = "z"

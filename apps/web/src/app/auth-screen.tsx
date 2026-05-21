@@ -96,7 +96,17 @@ export function AuthScreen() {
 		setState({ kind: "busy", what: "enrolling" });
 		let result: Awaited<ReturnType<typeof enroll>> | undefined;
 		try {
-			result = await enroll();
+			// `platform` pins enrollment to the device's built-in
+			// authenticator — Touch ID, Windows Hello, Android
+			// biometrics. Excludes external security keys AND
+			// password-manager authenticators (1Password, Bitwarden,
+			// …). This is a deliberate product choice for opfs-webauthn:
+			// the vault is local-first and the key material it derives
+			// must not sync through a third-party credential manager.
+			// Libraries depending on `@opfs/auth` can pick any
+			// `AuthenticatorAttachment` (or omit it) — this constraint
+			// lives in the app, not in the library.
+			result = await enroll({ authenticatorAttachment: "platform" });
 			// The wasm vault is `Send`-but-not-`Sync`-style: each handle
 			// owns a chunk of the wasm heap that we have to release
 			// explicitly. If `set()` rejects (OPFS write failure, quota,

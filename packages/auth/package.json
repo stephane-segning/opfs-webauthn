@@ -1,9 +1,23 @@
 {
 	"name": "@opfs/auth",
 	"version": "0.1.0",
-	"private": true,
 	"description": "WebAuthn PRF enrollment + unlock orchestration. Bridges the browser ceremony to the Rust crypto module.",
 	"license": "MIT",
+	"author": "Stephane Segning <stephane.segning@gmail.com>",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/stephane-segning/opfs-webauthn.git",
+		"directory": "packages/auth"
+	},
+	"homepage": "https://github.com/stephane-segning/opfs-webauthn/tree/main/packages/auth#readme",
+	"bugs": "https://github.com/stephane-segning/opfs-webauthn/issues",
+	"keywords": [
+		"webauthn",
+		"passkey",
+		"prf",
+		"encryption",
+		"local-first"
+	],
 	"type": "module",
 	"exports": {
 		".": {
@@ -12,11 +26,25 @@
 		}
 	},
 	"files": [
-		"src"
+		"dist",
+		"README.md"
 	],
+	"publishConfig": {
+		"access": "public",
+		"provenance": true,
+		"exports": {
+			".": {
+				"types": "./dist/index.d.ts",
+				"import": "./dist/index.js"
+			}
+		}
+	},
 	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"clean": "rm -rf dist",
 		"test": "vitest run",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"prepublishOnly": "pnpm run clean && pnpm run build"
 	},
 	"dependencies": {
 		"@opfs/core-wasm": "workspace:*"

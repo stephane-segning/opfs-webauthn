@@ -1,11 +1,17 @@
 [package]
 name = "opfs-crypto"
-description = "AES-256-GCM row codec, HKDF-SHA-256 KEK derivation, and BLAKE3 commitment codes for opfs-webauthn."
+description = "AES-256-GCM row codec, HKDF-SHA-256 KEK derivation, X25519 share, and BLAKE3 commitment codes — primitives for the opfs-webauthn local-first vault."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
 rust-version.workspace = true
+readme = "README.md"
+keywords = ["webauthn", "encryption", "aes-gcm", "hkdf", "x25519"]
+# Slugs from https://crates.io/category_slugs — max 5, must be exact.
+categories = ["cryptography", "no-std"]
 
 [lints]
 workspace = true

@@ -5,13 +5,21 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
 rust-version.workspace = true
+readme = "README.md"
+keywords = ["webauthn", "encryption", "sqlite", "vault", "local-first"]
+categories = ["cryptography", "database"]
 
 [lints]
 workspace = true
 
 [dependencies]
-opfs-crypto = { path = "../crypto" }
+# Workspace-managed `version + path` — single source of truth
+# in the root Cargo.toml's `[workspace.dependencies]`. Avoids
+# the hard-coded `0.1.0` drift codex flagged on PR #40.
+opfs-crypto = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 ciborium = { workspace = true }

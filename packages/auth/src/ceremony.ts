@@ -109,6 +109,20 @@ export async function enroll(options?: EnrollOptions): Promise<{
 	const userName = options?.userName ?? "vault";
 	const rpId = resolveRpId(options?.rpId);
 
+	const requestedAttachment = options?.authenticatorAttachment;
+	const authenticatorSelection: AuthenticatorSelectionCriteria = {
+		residentKey: "required",
+		userVerification: "required",
+		// Only include the field when the caller explicitly opts in.
+		// Setting it to `undefined` is functionally identical to
+		// omitting it for the browser, but tools that snapshot the
+		// `PublicKeyCredentialCreationOptions` for debugging look
+		// nicer without the noise.
+		...(requestedAttachment
+			? { authenticatorAttachment: requestedAttachment }
+			: {}),
+	};
+
 	const credential = (await runCeremony("passkey creation", () =>
 		navigator.credentials.create({
 			publicKey: {
@@ -116,10 +130,7 @@ export async function enroll(options?: EnrollOptions): Promise<{
 				user: { id: userHandle, name: userName, displayName: userName },
 				challenge,
 				pubKeyCredParams: PUBKEY_CRED_PARAMS,
-				authenticatorSelection: {
-					residentKey: "required",
-					userVerification: "required",
-				},
+				authenticatorSelection,
 				timeout: CEREMONY_TIMEOUT_MS,
 				extensions: {
 					prf: { eval: { first: prfSalt } },
@@ -129,6 +140,38 @@ export async function enroll(options?: EnrollOptions): Promise<{
 	)) as PublicKeyCredential | null;
 	if (!credential) {
 		throw new AuthCeremonyError("passkey creation returned no credential");
+	}
+
+	// Enforce the requested attachment after the fact. The
+	// `authenticatorSelection.authenticatorAttachment` hint above is
+	// best-effort — some browsers surface cross-platform options
+	// regardless. The credential carries its actual attachment in
+	// `authenticatorAttachment`; if the user enrolled with something
+	// the caller said no to, reject the credential rather than wrap
+	// data with a key the user doesn't expect to be where it is.
+	//
+	// **Reject on unknown too.** Some browsers / authenticators omit
+	// `authenticatorAttachment` from the credential entirely
+	// (returns `null` or undefined). If the caller asked for a
+	// specific attachment, we can't verify the actual one is what
+	// they wanted — fail closed, because the alternative is silently
+	// accepting a cross-platform credential when the app explicitly
+	// asked for platform-only.
+	if (requestedAttachment) {
+		const actual = credential.authenticatorAttachment;
+		if (!actual) {
+			throw new AuthUnsupportedError(
+				`enrollment requested authenticator attachment "${requestedAttachment}" ` +
+					"but the browser did not report the credential's actual attachment; " +
+					"unable to verify the request was honoured",
+			);
+		}
+		if (actual !== requestedAttachment) {
+			throw new AuthUnsupportedError(
+				`enrollment requested authenticator attachment "${requestedAttachment}" ` +
+					`but the user picked "${actual}"`,
+			);
+		}
 	}
 
 	let prfOutput = readPrfResult(credential);

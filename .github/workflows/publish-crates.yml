@@ -1,0 +1,116 @@
+name: Publish crate
+
+# Manual-only publish workflow for the opfs-* crates. Same reasoning
+# as the npm workflow — libraries release on a different cadence
+# than the app, and accidental publishes from `on: push` are not a
+# risk worth carrying.
+#
+# Pre-flight: bump the workspace `version` in the root `Cargo.toml`
+# (the publishable crates inherit it via `version.workspace = true`),
+# commit + push. Then trigger this workflow from the Actions UI and
+# pick the crate.
+#
+# Publish order matters when crates depend on each other:
+#   opfs-crypto         (no internal deps)
+#   opfs-share-protocol (depends on opfs-crypto)
+#   opfs-repo           (depends on opfs-crypto)
+# crates.io enforces this — `opfs-share-protocol` cannot publish
+# referencing a version of `opfs-crypto` that isn't yet on the
+# registry.
+
+on:
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: "Crate to publish"
+        required: true
+        type: choice
+        options:
+          - opfs-crypto
+          - opfs-share-protocol
+          - opfs-repo
+      dry-run:
+        description: "Package + verify only, do not push to crates.io"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: "publish ${{ inputs.crate }} (dry-run=${{ inputs.dry-run }})"
+    runs-on: ubuntu-latest
+    steps:
+      # Every `uses:` in this file pins to a full-length commit SHA.
+      # Release workflows handle `CRATES_IO_TOKEN`; a compromised/
+      # retargeted mutable tag could exfil the token or alter the
+      # published artifact. SHA pinning is the only immutable
+      # reference GitHub provides. Comments next to each entry
+      # note the version the SHA corresponds to so Dependabot
+      # bumps stay reviewable.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Rust
+        # `dtolnay/rust-toolchain` doesn't tag releases — pin to
+        # the head of the `stable` branch as of this commit. The
+        # action just installs whatever `rustup default stable`
+        # resolves to at run time, so toolchain reproducibility
+        # comes from `rust-toolchain.toml` (or workspace
+        # `rust-version`), not from the action SHA.
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@5cb072d7354962be830356aa6b146f7612846014 # v2.7.5
+        with:
+          # One cache per crate keeps the workspace's other builds
+          # from invalidating it. crates.io publishes are
+          # bandwidth-cheap; faster cargo here matters more.
+          key: publish-${{ inputs.crate }}
+
+      - name: Workspace sanity
+        # Catch the obvious things before we attempt anything that
+        # touches the registry.
+        run: |
+          cargo fmt --check
+          cargo clippy -p ${{ inputs.crate }} --all-targets -- -D warnings
+          cargo test -p ${{ inputs.crate }}
+
+      - name: Package — verify what would ship
+        run: |
+          # `cargo publish --dry-run` packages the crate, verifies
+          # the bundled source compiles standalone (so a missing
+          # path/version dep surfaces here), and aborts before the
+          # upload. The verifies-compiles step is what catches the
+          # "wait, my internal dep is only on path = ..." class of
+          # errors.
+          cargo publish --dry-run -p ${{ inputs.crate }}
+
+      - name: Publish
+        if: inputs.dry-run == false
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          cargo publish -p ${{ inputs.crate }}
+
+      - name: Verify on crates.io (post-publish)
+        if: inputs.dry-run == false
+        run: |
+          # crates.io has a few-minute index-rebuild lag; poll until
+          # the new version appears or the timeout fires. Keeps the
+          # run from succeeding silently while the artifact isn't
+          # actually reachable.
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "${{ inputs.crate }}") | .version')
+          echo "Waiting for ${{ inputs.crate }} v${version} on crates.io..."
+          for i in {1..30}; do
+            if curl -sSf "https://crates.io/api/v1/crates/${{ inputs.crate }}/${version}" >/dev/null; then
+              echo "Confirmed: ${{ inputs.crate }} v${version} is live."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::crates.io didn't index the publish within 5 min; check manually."
