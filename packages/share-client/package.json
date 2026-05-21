@@ -27,8 +27,7 @@
 	},
 	"files": [
 		"src",
-		"README.md",
-		"LICENSE"
+		"README.md"
 	],
 	"publishConfig": {
 		"access": "public",
