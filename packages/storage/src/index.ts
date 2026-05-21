@@ -24,6 +24,7 @@ import type { CryptoVault } from "@opfs/core-wasm";
 
 import { Repo } from "./repo.js";
 import { WorkerClient, type WorkerLike } from "./rpc.js";
+import { ensureWasm } from "./wasm.js";
 
 export type { ListPage, Note, NoteInput } from "./repo.js";
 export { Repo } from "./repo.js";
@@ -139,6 +140,11 @@ async function bootRepo(
  * for OPFS-SAH is universal.
  */
 export async function createRepo(opts: CreateRepoOptions): Promise<Repo> {
+	// `Repo` reaches into wasm-backed helpers (`generateRowId`,
+	// `aadFor`) synchronously, so initialise the wasm bundle on the
+	// page side before any of that runs. `ensureWasm` is idempotent
+	// — the worker calls it too on first DB open.
+	await ensureWasm();
 	if (opts.transport) {
 		// Test / advanced path: caller controls the transport.
 		return bootRepo(opts.transport, opts.vault);

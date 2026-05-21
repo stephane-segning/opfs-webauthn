@@ -10,7 +10,8 @@
 
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 
-import { SCHEMA_SQL, SCHEMA_VERSION } from "./schema.js";
+import { getSchemaSql, getSchemaVersion } from "./schema.js";
+import { ensureWasm } from "./wasm.js";
 
 type SqliteApi = Awaited<ReturnType<typeof sqlite3InitModule>>;
 type SAHPoolUtil = Awaited<ReturnType<SqliteApi["installOpfsSAHPoolVfs"]>>;
@@ -51,16 +52,21 @@ class OpfsDatabase implements Database {
  * Open the notes database, install the OPFS SAH-pool VFS once per
  * worker, run the canonical schema, and stamp the version in
  * `schema_meta`. Subsequent calls return the same handle.
+ *
+ * The wasm bundle is initialised on entry — the schema SQL and the
+ * version int both come from `opfs-repo` via wasm-bindgen, so they
+ * have to be reachable before the first `getSchemaSql()` call.
  */
 export async function openNotesDatabase(filename: string): Promise<Database> {
+	await ensureWasm();
 	const sqlite3 = await sqlite3InitModule();
 	const pool = await sqlite3.installOpfsSAHPoolVfs({});
 	const handle = new pool.OpfsSAHPoolDb(`/${filename}`);
 	const db = new OpfsDatabase(handle);
-	db.exec(SCHEMA_SQL);
+	db.exec(getSchemaSql());
 	db.exec(
 		"INSERT INTO schema_meta(key, value) VALUES('version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-		[String(SCHEMA_VERSION)],
+		[String(getSchemaVersion())],
 	);
 	return db;
 }

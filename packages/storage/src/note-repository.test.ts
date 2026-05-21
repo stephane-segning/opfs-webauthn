@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { Database } from "./database.js";
 import { encodeRowId, generateRowId } from "./id.js";
 import { NoteRepositorySql } from "./note-repository.js";
 import type { EncryptedNoteRow, NoteRowInput } from "./row.js";
+import { ensureWasm } from "./wasm.js";
+
+// `encodeRowId` / `generateRowId` are wasm-backed; init once per file.
+beforeAll(ensureWasm);
 
 type Capture = { sql: string; bind: readonly unknown[] };
 

@@ -13,7 +13,7 @@ import { type Database, openNotesDatabase } from "./database.js";
 import { NoteRepositorySql } from "./note-repository.js";
 import type { EncryptedNoteRow } from "./row.js";
 import { notify, type WorkerRequest, type WorkerResponse } from "./rpc.js";
-import { SCHEMA_VERSION } from "./schema.js";
+import { getSchemaVersion } from "./schema.js";
 
 const DB_FILENAME = "opfs-webauthn-notes.sqlite";
 
@@ -45,8 +45,10 @@ const handlers: {
 } = {
 	ping: async () => ({ kind: "ping", pong: true }),
 	bootstrap: async () => {
+		// `withDb` ensures wasm is initialised (via `openNotesDatabase`),
+		// which `getSchemaVersion()` needs to be reachable.
 		await withDb(() => undefined);
-		return { kind: "bootstrap", schemaVersion: SCHEMA_VERSION };
+		return { kind: "bootstrap", schemaVersion: getSchemaVersion() };
 	},
 	listNotes: (req) =>
 		withDb((r) => {

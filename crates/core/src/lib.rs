@@ -142,6 +142,99 @@ pub fn verify_code(code: &str, epk: &[u8]) -> bool {
     commitment::verify_code(code, epk).is_ok()
 }
 
+// ---------------------------------------------------------------
+// `opfs-repo` re-exports.
+//
+// The Rust crate `opfs-repo` is the canonical source for the SQL
+// schema, the per-field AEAD AAD construction, and the row-id
+// Crockford-base32 codec. These wasm-bindgen wrappers expose them
+// to `@opfs/storage` so the JS side stops re-declaring the same
+// constants and codec in TypeScript.
+// ---------------------------------------------------------------
+
+/// Canonical schema SQL — the `notes` + `schema_meta` DDL and the
+/// `idx_notes_recent` partial index. The JS-side worker hands this
+/// verbatim to `sqlite-wasm`'s `db.exec` on cold start.
+#[wasm_bindgen(js_name = schemaSql)]
+#[must_use]
+pub fn schema_sql() -> String {
+    opfs_repo::SCHEMA_SQL.to_owned()
+}
+
+/// Current schema version recorded in `schema_meta.version`. Bumped
+/// whenever a new forward-migration lands.
+#[wasm_bindgen(js_name = schemaVersion)]
+#[must_use]
+#[allow(
+    clippy::missing_const_for_fn,
+    reason = "wasm-bindgen does not accept const fn"
+)]
+pub fn schema_version() -> u32 {
+    opfs_repo::SCHEMA_VERSION
+}
+
+/// The domain-separator prefix every per-field AAD starts with.
+/// Exposed so JS callers can recognise / validate AAD bytes without
+/// hard-coding the string.
+#[wasm_bindgen(js_name = rowAad)]
+#[must_use]
+pub fn row_aad() -> String {
+    opfs_repo::ROW_AAD.to_owned()
+}
+
+/// Build the AES-GCM AAD bytes for a given row + field, matching
+/// `aad_for` in the `opfs-repo` crate. Format is
+/// `{ROW_AAD}/{field}/{row_id}`; see the crate docs for invariants.
+#[wasm_bindgen(js_name = aadFor)]
+#[must_use]
+pub fn aad_for(row_id: &str, field: &str) -> Vec<u8> {
+    opfs_repo::aad_for(row_id, field)
+}
+
+/// Encode 16 bytes as a 26-character Crockford-base32 row id.
+/// Throws on the wrong input length (caller's bug — the row-id
+/// length is a fixed contract).
+#[wasm_bindgen(js_name = encodeRowId)]
+pub fn encode_row_id(bytes: &[u8]) -> Result<String, JsError> {
+    // `opfs_repo::Error` is `thiserror`-derived → `Display`, so
+    // `.to_string()` is in scope without crossing the local
+    // `core::DisplayError` trait `into_js_error` requires.
+    opfs_repo::encode_row_id(bytes).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Decode a 26-character Crockford-base32 row id back into its
+/// 16-byte form. Throws on the wrong length or any non-Crockford
+/// character (including non-ASCII look-alikes — see the codec
+/// docs).
+#[wasm_bindgen(js_name = decodeRowId)]
+pub fn decode_row_id(id: &str) -> Result<Vec<u8>, JsError> {
+    opfs_repo::decode_row_id(id).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Length in bytes of a row id at rest (always 16).
+#[wasm_bindgen(js_name = rowIdBytes)]
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::missing_const_for_fn,
+    reason = "compile-time constant is 16; wasm-bindgen rejects const fn"
+)]
+pub fn row_id_bytes() -> u32 {
+    opfs_repo::ROW_ID_BYTES as u32
+}
+
+/// Length in characters of a Crockford-encoded row id (always 26).
+#[wasm_bindgen(js_name = rowIdChars)]
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::missing_const_for_fn,
+    reason = "compile-time constant is 26; wasm-bindgen rejects const fn"
+)]
+pub fn row_id_chars() -> u32 {
+    opfs_repo::ROW_ID_CHARS as u32
+}
+
 /// The opened vault. Holds the in-memory DEK; never exposes it to JS.
 /// Drop semantics zeroize the DEK.
 #[wasm_bindgen]
