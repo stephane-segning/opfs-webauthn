@@ -13,18 +13,23 @@
 
 import { Connection, type PortLike } from "./connection.js";
 import { openOpfsDatabase } from "./database.js";
-import { TX_APPLIED_CHANNEL } from "./multi-tab.js";
+import { makeTxBroadcaster } from "./multi-tab.js";
 import { createDispatcher } from "./worker-handlers.js";
 
 declare const self: DedicatedWorkerGlobalScope;
 
 const DB_FILENAME = "opfs-webauthn-notes.sqlite";
 
-const txChannel = new BroadcastChannel(TX_APPLIED_CHANNEL);
+// `makeTxBroadcaster` feature-detects `BroadcastChannel`; on
+// environments without it (older iOS Safari WebView, the exact
+// fallback the dedicated worker is here for) it returns a no-op so
+// bootstrap still succeeds. Cross-tab fan-out is then unavailable —
+// the app keeps working per-tab.
+const tx = makeTxBroadcaster();
 
 const dispatch = createDispatcher({
 	openDatabase: () => openOpfsDatabase(DB_FILENAME),
-	broadcast: (notification) => txChannel.postMessage(notification),
+	broadcast: tx.broadcast,
 });
 
 new Connection(self as unknown as PortLike, dispatch);

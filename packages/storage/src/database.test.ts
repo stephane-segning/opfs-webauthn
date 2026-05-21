@@ -76,6 +76,39 @@ describe("sqlite-wasm + migrations bootstrap", () => {
 			db.close();
 		}
 	});
+
+	it("refuses to migrate a DB with a malformed schema_meta.version", async () => {
+		// `Number.parseInt("1corrupt")` happily returns `1`; the runner
+		// must reject the value outright instead of silently coercing
+		// it. Codex flagged the prior tolerant parse on PR #43.
+		const db = await freshDb();
+		try {
+			db.exec(
+				"INSERT INTO schema_meta(key, value) VALUES('version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+				["1corrupt"],
+			);
+			expect(() => applyMigrations(db)).toThrow(/corrupt schema_meta/);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("refuses to migrate against an unknown future version", async () => {
+		// `schema_meta.version` set to a version this binary doesn't
+		// know about must surface as an error (so a downgraded build
+		// won't silently corrupt a newer DB). The wasm-side
+		// `pendingMigrations` returns `UnknownSchemaVersion` for that.
+		const db = await freshDb();
+		try {
+			db.exec(
+				"INSERT INTO schema_meta(key, value) VALUES('version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+				[String(getSchemaVersion() + 1)],
+			);
+			expect(() => applyMigrations(db)).toThrow();
+		} finally {
+			db.close();
+		}
+	});
 });
 
 describe("NoteRepositorySql against real SQLite", () => {

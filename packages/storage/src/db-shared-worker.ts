@@ -14,18 +14,21 @@
 
 import { Connection, type PortLike } from "./connection.js";
 import { openOpfsDatabase } from "./database.js";
-import { TX_APPLIED_CHANNEL } from "./multi-tab.js";
+import { makeTxBroadcaster } from "./multi-tab.js";
 import { createDispatcher } from "./worker-handlers.js";
 
 declare const self: SharedWorkerGlobalScope;
 
 const DB_FILENAME = "opfs-webauthn-notes.sqlite";
 
-const txChannel = new BroadcastChannel(TX_APPLIED_CHANNEL);
+// `makeTxBroadcaster` feature-detects `BroadcastChannel`; the
+// SharedWorker still answers RPC if BC is missing — cross-tab
+// `tx-applied` fan-out simply doesn't fire on those targets.
+const tx = makeTxBroadcaster();
 
 const dispatch = createDispatcher({
 	openDatabase: () => openOpfsDatabase(DB_FILENAME),
-	broadcast: (notification) => txChannel.postMessage(notification),
+	broadcast: tx.broadcast,
 });
 
 self.addEventListener("connect", (event) => {

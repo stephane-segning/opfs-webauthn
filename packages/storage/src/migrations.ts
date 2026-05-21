@@ -33,6 +33,14 @@ import { getWasm } from "./wasm.js";
  * try/catch around `SELECT FROM schema_meta` because the latter
  * leaves a misleading error trail in any sqlite logger the host
  * has plumbed in.
+ *
+ * Throws (not coerces) on anything other than a non-negative
+ * integer literal in the `value` column. `Number.parseInt` happily
+ * eats trailing garbage (`"1corrupt"` → `1`), which would let a
+ * scrambled metadata row sneak past the migration runner and trigger
+ * the wrong migration path once non-idempotent migrations land. The
+ * caller is expected to surface the error as "DB unreadable / refuse
+ * to write" — codex flagged this on PR #43.
  */
 function readInstalledVersion(db: Database): number {
 	const exists = db.query(
@@ -43,13 +51,18 @@ function readInstalledVersion(db: Database): number {
 	const first = rows[0];
 	if (!first) return 0;
 	const value = first[0];
-	if (typeof value === "string") {
-		const parsed = Number.parseInt(value, 10);
-		return Number.isFinite(parsed) ? parsed : 0;
+	if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
+		return value;
 	}
-	if (typeof value === "number" && Number.isFinite(value)) return value;
-	if (typeof value === "bigint") return Number(value);
-	return 0;
+	if (typeof value === "bigint" && value >= 0n) return Number(value);
+	if (typeof value === "string" && /^\d+$/.test(value)) {
+		return Number(value);
+	}
+	const repr =
+		typeof value === "string" ? JSON.stringify(value) : String(value);
+	throw new Error(
+		`opfs-storage: corrupt schema_meta.version (got ${repr}); refusing to migrate`,
+	);
 }
 
 const STAMP_SQL = `
@@ -62,27 +75,36 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
  * step won't leave the DB in a torn state. On any failure the
  * transaction is rolled back and the exception propagates so the
  * caller can surface it.
+ *
+ * Each `Migration` entry the wasm side hands back is a proxy onto
+ * Rust-owned memory and must be `.free()`d. We do that in an outer
+ * `finally` so a mid-loop migration failure still releases every
+ * remaining entry in the list (gemini flagged the prior per-step
+ * `finally` on PR #43 — it leaked the tail of the array on the
+ * first throwing migration).
  */
 export function applyMigrations(db: Database): void {
 	const installed = readInstalledVersion(db);
 	const pending = getWasm().pendingMigrations(installed);
-	for (const migration of pending) {
-		db.exec("BEGIN");
-		try {
-			db.exec(migration.upSql);
-			db.exec(STAMP_SQL, [String(migration.toVersion)]);
-			db.exec("COMMIT");
-		} catch (err) {
-			// Best-effort rollback. If `COMMIT` itself threw the txn is
-			// already closed; the `ROLLBACK` will fail harmlessly.
+	try {
+		for (const migration of pending) {
+			db.exec("BEGIN");
 			try {
-				db.exec("ROLLBACK");
-			} catch {
-				/* swallow */
+				db.exec(migration.upSql);
+				db.exec(STAMP_SQL, [String(migration.toVersion)]);
+				db.exec("COMMIT");
+			} catch (err) {
+				// Best-effort rollback. If `COMMIT` itself threw the txn is
+				// already closed; the `ROLLBACK` will fail harmlessly.
+				try {
+					db.exec("ROLLBACK");
+				} catch {
+					/* swallow */
+				}
+				throw err;
 			}
-			throw err;
-		} finally {
-			migration.free();
 		}
+	} finally {
+		for (const migration of pending) migration.free();
 	}
 }

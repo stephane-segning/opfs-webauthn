@@ -19,7 +19,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { Connection, type PortLike } from "./connection.js";
 import { openInMemoryDatabase } from "./database.js";
-import { subscribeTxApplied, TX_APPLIED_CHANNEL } from "./multi-tab.js";
+import {
+	makeTxBroadcaster,
+	subscribeTxApplied,
+	TX_APPLIED_CHANNEL,
+} from "./multi-tab.js";
 import { Repo } from "./repo.js";
 import { WorkerClient, type WorkerLike } from "./rpc.js";
 import { ensureWasm } from "./wasm.js";
@@ -127,10 +131,10 @@ describe("BroadcastChannel multi-tab fan-out", () => {
 
 	it("worker dispatcher broadcasts after upsertNote, reaching another tab", async () => {
 		const db = await openInMemoryDatabase();
-		const workerChannel = ownedChannel(TX_APPLIED_CHANNEL);
+		const tx = makeTxBroadcaster();
 		const dispatch = createDispatcher({
 			openDatabase: async () => db,
-			broadcast: (n) => workerChannel.postMessage(n),
+			broadcast: tx.broadcast,
 		});
 		const { page, worker } = makeLoopback();
 		new Connection(worker, dispatch);
@@ -159,12 +163,35 @@ describe("BroadcastChannel multi-tab fan-out", () => {
 		}
 	});
 
+	it("degrades to no-op when BroadcastChannel is missing", () => {
+		// Older iOS Safari / WebView contexts lack BC. The helpers must
+		// stay callable so worker bootstrap doesn't throw at module
+		// load and the page-side subscribe doesn't crash the caller.
+		// Codex flagged the unconditional BC construction on PR #43.
+		const real = (globalThis as { BroadcastChannel?: unknown })
+			.BroadcastChannel;
+		(globalThis as { BroadcastChannel?: unknown }).BroadcastChannel = undefined;
+		try {
+			expect(() => makeTxBroadcaster().close()).not.toThrow();
+			expect(() => subscribeTxApplied(() => {})()).not.toThrow();
+			// The broadcaster must accept a notification silently — the
+			// dispatcher always calls it after every successful write.
+			const tx = makeTxBroadcaster();
+			expect(() =>
+				tx.broadcast({ kind: "tx-applied", ids: ["x"] }),
+			).not.toThrow();
+			tx.close();
+		} finally {
+			(globalThis as { BroadcastChannel?: unknown }).BroadcastChannel = real;
+		}
+	});
+
 	it("archiveNote also fans out the affected id", async () => {
 		const db = await openInMemoryDatabase();
-		const workerChannel = ownedChannel(TX_APPLIED_CHANNEL);
+		const tx = makeTxBroadcaster();
 		const dispatch = createDispatcher({
 			openDatabase: async () => db,
-			broadcast: (n) => workerChannel.postMessage(n),
+			broadcast: tx.broadcast,
 		});
 		const { page, worker } = makeLoopback();
 		new Connection(worker, dispatch);
