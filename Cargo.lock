@@ -671,10 +671,7 @@ dependencies = [
 name = "opfs-repo"
 version = "0.1.0"
 dependencies = [
- "ciborium",
  "opfs-crypto",
- "serde",
- "serde_bytes",
  "thiserror",
 ]
 

@@ -20,7 +20,7 @@ workspace = true
 # in the root Cargo.toml's `[workspace.dependencies]`. Avoids
 # the hard-coded `0.1.0` drift codex flagged on PR #40.
 opfs-crypto = { workspace = true }
-serde = { workspace = true }
-serde_bytes = { workspace = true }
-ciborium = { workspace = true }
+# `no_std`-compatible error derive. The crate's only error type
+# is `id::Error` for row-id codec failures; future modules may
+# add their own variants.
 thiserror = { workspace = true }
