@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import {
 	decodeRowId,
@@ -7,6 +7,13 @@ import {
 	ROW_ID_BYTES,
 	ROW_ID_CHARS,
 } from "./id.js";
+import { ensureWasm } from "./wasm.js";
+
+// The id codec lives in `opfs-repo` (wasm) — every test needs the
+// bindings loaded before the first call. `ensureWasm` is idempotent;
+// vitest's beforeAll guarantees it runs once per file before any
+// test body. See `wasm.ts` for the node-vs-browser init paths.
+beforeAll(ensureWasm);
 
 describe("rowId codec", () => {
 	it("round-trips arbitrary 16-byte payloads", () => {
@@ -24,9 +31,12 @@ describe("rowId codec", () => {
 	});
 
 	it("rejects payloads of the wrong length", () => {
-		expect(() => encodeRowId(new Uint8Array(15))).toThrow(/16 bytes/);
-		expect(() => encodeRowId(new Uint8Array(17))).toThrow(/16 bytes/);
-		expect(() => decodeRowId("ABC")).toThrow(/26 chars/);
+		// The wasm-side `encodeRowId` throws a `JsError` whose message
+		// carries the expected/got lengths. Match substring rather than
+		// the exact text so the test survives minor Rust-side rewording.
+		expect(() => encodeRowId(new Uint8Array(15))).toThrow(/16/);
+		expect(() => encodeRowId(new Uint8Array(17))).toThrow(/16/);
+		expect(() => decodeRowId("ABC")).toThrow(/26/);
 	});
 
 	it("rejects non-Crockford characters", () => {
