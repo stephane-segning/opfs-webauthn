@@ -1,38 +1,52 @@
-//! SQL schema, migrations, and encrypted row codec.
+//! SQL schema, migrations, row id codec, and per-field AEAD-AAD
+//! construction for the opfs-webauthn notes vault.
 //!
-//! This crate is a stub: the schema and migration framework will land
-//! in a follow-up PR. The placeholder keeps the workspace graph
-//! buildable and the public surface visible.
+//! Pairs with [`opfs_crypto`] for the AES-GCM seal/open primitives
+//! and with `sqlite-wasm` on the JavaScript side (see
+//! [ADR 0004][adr0004]) for the actual database driver. The Rust
+//! side is the source of truth for the schema string and the AAD
+//! construction — the JS side (`packages/storage`) currently
+//! re-declares them as JS constants; a follow-up PR ports it to
+//! consume these values through `@opfs/core-wasm`.
+//!
+//! [adr0004]: https://github.com/stephane-segning/opfs-webauthn/blob/main/docs/adrs/0004-sqlite-opfs-storage.md
 
 #![no_std]
 
 extern crate alloc;
 
+pub mod codec;
+pub mod error;
+pub mod id;
+pub mod migrations;
+pub mod schema;
+
+// Re-exports — the canonical API. Internal modules also stay
+// public for crate consumers who want full visibility, but most
+// callers reach for these.
+pub use codec::aad_for;
+pub use error::Error;
+pub use id::{ROW_ID_BYTES, ROW_ID_CHARS, decode as decode_row_id, encode as encode_row_id};
+pub use migrations::{MIGRATIONS, Migration, pending as pending_migrations};
+pub use schema::{ROW_AAD, SCHEMA_SQL, SCHEMA_VERSION, current_schema_sql};
+
+// Re-export the crypto crate so consumers building on opfs-repo
+// don't have to pull it in twice. Same pattern as the wasm-bindgen
+// surface in `opfs-core`.
 pub use opfs_crypto;
-
-/// Current schema version. Bumped whenever a migration lands.
-pub const SCHEMA_VERSION: u32 = 0;
-
-/// Placeholder for the canonical schema SQL string.
-///
-/// Will be replaced by the migration-driven schema in the storage
-/// implementation PR. Kept here so the WASM surface in `opfs-core` can
-/// already import the name.
-pub const fn current_schema_sql() -> &'static str {
-    ""
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn schema_version_starts_at_zero() {
-        assert_eq!(SCHEMA_VERSION, 0);
+    fn schema_version_matches_last_migration() {
+        let last = MIGRATIONS.last().expect("non-empty");
+        assert_eq!(last.to_version, SCHEMA_VERSION);
     }
 
     #[test]
-    fn current_schema_sql_is_empty_for_now() {
-        assert!(current_schema_sql().is_empty());
+    fn current_schema_sql_round_trips_to_constant() {
+        assert_eq!(current_schema_sql(), SCHEMA_SQL);
     }
 }
