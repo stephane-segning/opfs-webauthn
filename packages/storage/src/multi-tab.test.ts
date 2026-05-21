@@ -95,6 +95,24 @@ afterAll(() => {
 	for (const ch of ownedChannels) ch.close();
 });
 
+/**
+ * Poll until `predicate()` is true or `timeoutMs` elapses. BC
+ * delivery is async and on slow CI runners can take well over the
+ * naive 10ms window that worked locally. Polling instead of a
+ * single sleep keeps the assertion deterministic without bloating
+ * the per-test budget.
+ */
+async function waitFor(
+	predicate: () => boolean,
+	timeoutMs = 1_000,
+	stepMs = 5,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (!predicate() && Date.now() < deadline) {
+		await new Promise((r) => setTimeout(r, stepMs));
+	}
+}
+
 describe("BroadcastChannel multi-tab fan-out", () => {
 	it("constants are stable and exported", () => {
 		expect(TX_APPLIED_CHANNEL).toBe("opfs-storage-tx");
@@ -108,9 +126,7 @@ describe("BroadcastChannel multi-tab fan-out", () => {
 		try {
 			const emitter = ownedChannel(TX_APPLIED_CHANNEL);
 			emitter.postMessage({ kind: "tx-applied", ids: ["a", "b"] });
-			// BC delivery is async; yield twice so the listener fires.
-			await new Promise((r) => setTimeout(r, 0));
-			await new Promise((r) => setTimeout(r, 0));
+			await waitFor(() => received.length > 0);
 			expect(received).toEqual([["a", "b"]]);
 		} finally {
 			unsubscribe();
@@ -125,7 +141,10 @@ describe("BroadcastChannel multi-tab fan-out", () => {
 		unsubscribe();
 		const emitter = ownedChannel(TX_APPLIED_CHANNEL);
 		emitter.postMessage({ kind: "tx-applied", ids: ["should-not-arrive"] });
-		await new Promise((r) => setTimeout(r, 5));
+		// Give BC enough time to deliver if it were going to —
+		// `waitFor` exits early on truthy, so an idle wait still costs
+		// the full budget. A flat 50ms is the bounded confirmation.
+		await new Promise((r) => setTimeout(r, 50));
 		expect(received).toEqual([]);
 	});
 
@@ -153,9 +172,7 @@ describe("BroadcastChannel multi-tab fan-out", () => {
 				title: "broadcast me",
 				body: "and you'll see this",
 			});
-			// BC delivery is async — give the listener a turn or two
-			// to fire. A real UI would refresh on the next paint.
-			await new Promise((r) => setTimeout(r, 10));
+			await waitFor(() => received.includes(note.id));
 			expect(received).toContain(note.id);
 		} finally {
 			unsubscribe();
@@ -207,7 +224,7 @@ describe("BroadcastChannel multi-tab fan-out", () => {
 		});
 		try {
 			await repo.archiveNote(note.id);
-			await new Promise((r) => setTimeout(r, 10));
+			await waitFor(() => received.includes(note.id));
 			expect(received).toContain(note.id);
 		} finally {
 			unsubscribe();
