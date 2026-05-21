@@ -28,4 +28,25 @@ pub enum Error {
         /// The offending character.
         ch: char,
     },
+
+    /// [`crate::migrations::pending`] was called with a schema
+    /// version this binary doesn't recognise — typically a DB
+    /// created by a newer build of the app, or a corrupted
+    /// `schema_meta.version` value.
+    ///
+    /// Distinct from the "already current" case (returned as
+    /// `Ok(&[])`) so callers can surface a deliberate "this
+    /// binary is too old / the DB version is corrupt" message
+    /// instead of silently proceeding against a schema they
+    /// don't understand.
+    #[error(
+        "unknown schema version {current} (this binary knows up to {latest}); refusing to migrate"
+    )]
+    UnknownSchemaVersion {
+        /// The version recorded in the DB.
+        current: u32,
+        /// The latest version this binary knows about
+        /// ([`crate::schema::SCHEMA_VERSION`]).
+        latest: u32,
+    },
 }

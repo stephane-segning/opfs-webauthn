@@ -40,22 +40,43 @@ pub const MIGRATIONS: &[Migration] = &[Migration {
 }];
 
 /// Return the migrations a DB at `current_version` needs to run to
-/// reach [`crate::schema::SCHEMA_VERSION`]. Empty slice means the
-/// DB is already current.
-#[must_use]
-pub fn pending(current_version: u32) -> &'static [Migration] {
+/// reach [`crate::schema::SCHEMA_VERSION`].
+///
+/// - `Ok(&[])` — the DB is already at `SCHEMA_VERSION`, no work to do.
+/// - `Ok(&[...])` — apply each migration in order; each step's
+///   `up_sql` is safe to run as a single transaction.
+/// - `Err(Error::UnknownSchemaVersion)` — `current_version` is
+///   neither a known `from_version` nor `SCHEMA_VERSION`. Most
+///   commonly: the DB was created by a newer binary that knows
+///   more migrations than we do, or `schema_meta.version` is
+///   corrupted. Caller should refuse to proceed rather than try
+///   to wing it.
+///
+/// Returning a typed error here (rather than an empty slice for
+/// both the "current" and "unknown" cases — the original API)
+/// lets the driver distinguish those two and surface "this binary
+/// is too old / the DB is corrupt" instead of silently writing
+/// against a schema it doesn't understand.
+pub fn pending(current_version: u32) -> Result<&'static [Migration], crate::error::Error> {
+    use crate::error::Error;
+    use crate::schema::SCHEMA_VERSION;
+
+    if current_version == SCHEMA_VERSION {
+        return Ok(&[]);
+    }
     // The list is dense and monotonic; bisect would be overkill.
     // Walk to the first entry whose `from_version` matches and
     // return everything from there.
-    let start = MIGRATIONS
+    MIGRATIONS
         .iter()
-        .position(|m| m.from_version == current_version);
-    match start {
-        Some(i) => &MIGRATIONS[i..],
-        // `current_version` is past the last `to_version` — schema
-        // is current, nothing to do. (We don't try to "downgrade".)
-        None => &[],
-    }
+        .position(|m| m.from_version == current_version)
+        .map_or(
+            Err(Error::UnknownSchemaVersion {
+                current: current_version,
+                latest: SCHEMA_VERSION,
+            }),
+            |i| Ok(&MIGRATIONS[i..]),
+        )
 }
 
 #[cfg(test)]
@@ -86,24 +107,30 @@ mod tests {
 
     #[test]
     fn pending_on_fresh_db_returns_all() {
-        let p = pending(0);
+        let p = pending(0).expect("0 is a known from_version");
         assert_eq!(p.len(), MIGRATIONS.len());
         assert_eq!(p[0].from_version, 0);
     }
 
     #[test]
     fn pending_on_current_returns_empty() {
-        let p = pending(SCHEMA_VERSION);
+        let p = pending(SCHEMA_VERSION).expect("current is a known version");
         assert!(p.is_empty());
     }
 
     #[test]
-    fn pending_on_past_returns_empty() {
-        // A future schema bumped beyond what this binary knows about
-        // is a no-op rather than a panic — the driver checks the
-        // returned slice's emptiness and surfaces the version
-        // mismatch as a typed error, not as a missing migration.
-        let p = pending(SCHEMA_VERSION + 1);
-        assert!(p.is_empty());
+    fn pending_on_unknown_version_errors() {
+        // A schema version this binary doesn't recognise — most
+        // commonly a DB created by a newer build, or a corrupted
+        // `schema_meta.version`. The function now distinguishes
+        // this from "already current" so callers can refuse to
+        // proceed (codex on PR #41 flagged the prior empty-slice
+        // ambiguity).
+        let err = pending(SCHEMA_VERSION + 1).expect_err("unknown version must surface as Err");
+        assert!(matches!(
+            err,
+            crate::error::Error::UnknownSchemaVersion { current, latest }
+                if current == SCHEMA_VERSION + 1 && latest == SCHEMA_VERSION,
+        ));
     }
 }

@@ -81,10 +81,17 @@ pub fn decode(id: &str) -> Result<Vec<u8>, Error> {
     let mut bits = 0u32;
     let mut value = 0u32;
     for ch in id.chars() {
+        // Compare full chars, not `ch as u8`: that truncation drops
+        // every code-point bit above 0xff, so a non-ASCII char
+        // whose low byte happens to land on a Crockford digit
+        // would silently decode (e.g. `İ` U+0130 truncates to
+        // 0x30 = `'0'`). The JS-side decoder uses `String.indexOf`
+        // over the alphabet string and rejects those; we match that
+        // by going through `char::from` on each ASCII byte.
         let upper = ch.to_ascii_uppercase();
         let idx = CROCKFORD
             .iter()
-            .position(|&c| c == upper as u8)
+            .position(|&c| char::from(c) == upper)
             .ok_or(Error::InvalidRowIdChar { ch })?;
         // `position` returns 0..32 (alphabet length); fits trivially
         // in u32 without truncation. Cast is exhaustively
@@ -153,11 +160,17 @@ mod tests {
     fn encode_wrong_length_errors() {
         assert!(matches!(
             encode(&[0; 15]),
-            Err(Error::WrongRowIdLength { expected: 16, got: 15 })
+            Err(Error::WrongRowIdLength {
+                expected: 16,
+                got: 15
+            })
         ));
         assert!(matches!(
             encode(&[0; 17]),
-            Err(Error::WrongRowIdLength { expected: 16, got: 17 })
+            Err(Error::WrongRowIdLength {
+                expected: 16,
+                got: 17
+            })
         ));
     }
 
@@ -175,6 +188,24 @@ mod tests {
         // Crockford) at a fixed position.
         let mut bad = String::from("00000000000000000000000000");
         bad.replace_range(5..6, "I");
+        assert!(matches!(decode(&bad), Err(Error::InvalidRowIdChar { .. })));
+    }
+
+    #[test]
+    fn decode_rejects_non_ascii_lookalikes() {
+        // Regression — gemini + codex on PR #41 flagged that an
+        // earlier version cast `char` to `u8`, so `İ` (U+0130) would
+        // truncate to 0x30 and decode as `'0'`. The JS-side decoder
+        // rejects `İ`, so accepting it on the Rust side would be a
+        // silent cross-language divergence. We pad with regular `0`s
+        // to hit ROW_ID_CHARS (26) before the per-char check fires.
+        let mut bad = String::from("00000000000000000000000000");
+        // Replace one ASCII `0` with `İ`. `İ` is 2 UTF-8 bytes but
+        // counts as 1 `char`, so the chars().count() check still
+        // sees 26 and we reach the alphabet lookup.
+        let mut chars: alloc::vec::Vec<char> = bad.chars().collect();
+        chars[5] = '\u{0130}'; // LATIN CAPITAL LETTER I WITH DOT ABOVE
+        bad = chars.into_iter().collect();
         assert!(matches!(decode(&bad), Err(Error::InvalidRowIdChar { .. })));
     }
 }

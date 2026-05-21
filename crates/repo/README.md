@@ -70,7 +70,11 @@ conn.execute(
 let installed: u32 = conn
     .query_row("SELECT value FROM schema_meta WHERE key='version'", [], |r| r.get(0))?
     .parse()?;
-for step in pending_migrations(installed) {
+// `pending` returns `Err(UnknownSchemaVersion)` if the DB was
+// created by a newer binary than us — distinguishable from
+// "already current" (which returns `Ok(&[])`).
+let steps = pending_migrations(installed)?;
+for step in steps {
     conn.execute_batch(step.up_sql)?;
     conn.execute(
         "UPDATE schema_meta SET value=?1 WHERE key='version'",
