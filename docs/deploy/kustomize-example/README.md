@@ -76,20 +76,44 @@ context: |
 Replace with your real ArgoCD UI URL. This shows up as the
 `logURL` on each GitHub Deployment status.
 
-### 4. GitHub App IDs (if different from the example)
+### 4. GitHub App IDs
 
-The notifications ConfigMap's `service.github` references the
-App's numeric `appID` and `installationID`:
+The notifications ConfigMap's `service.github` has placeholders
+for the App's numeric `appID` and `installationID`:
 
 ```yaml
 service.github: |
-  appID: 2926172
-  installationID: 111820839
+  appID: <YOUR_APP_ID>
+  installationID: <YOUR_INSTALLATION_ID>
   privateKey: $github-privateKey
 ```
 
-These are pulled from the `repo-creds` Secret you already have —
-verify and adjust if you're forking with your own App.
+Copy them from your existing repo-creds Secret:
+
+```sh
+kubectl -n argocd get secret github-app-creds--stephane-segning \
+  -o jsonpath='{.data.githubAppID}' | base64 -d
+kubectl -n argocd get secret github-app-creds--stephane-segning \
+  -o jsonpath='{.data.githubAppInstallationID}' | base64 -d
+```
+
+### 5. GitHub repo the Deployments land on
+
+Both templates in `argocd-notifications-cm.yaml` have:
+
+```yaml
+repoURLPath: '{{ "https://github.com/<your-org>/<your-repo>" }}'
+```
+
+Set this to **the repo your GitHub App is installed on with
+`Deployments: write`**. If the App can't reach the URL the
+controller logs `403/404` and no Deployment is posted. For
+operators tracking opfs-webauthn directly, this is
+`https://github.com/stephane-segning/opfs-webauthn`; for forks,
+your fork URL.
+
+Edit it in **both** the `template.app-deployed` and
+`template.app-deployed-failed` blocks.
 
 ## Secret that lives **outside** kustomize
 
@@ -100,18 +124,18 @@ isn't the place for it (use sealed-secrets / external-secrets /
 SOPS / whatever you have).
 
 If you already have the App key in your existing repo-creds
-Secret, reuse it:
+Secret, pipe it directly — no on-disk intermediate so the
+private key never persists if the command is interrupted
+between `kubectl get` and `kubectl create`:
 
 ```sh
 kubectl -n argocd get secret github-app-creds--stephane-segning \
   -o jsonpath='{.data.githubAppPrivateKey}' \
-  | base64 -d > /tmp/github-pk.pem
-
-kubectl -n argocd create secret generic argocd-notifications-secret \
-  --from-file=github-privateKey=/tmp/github-pk.pem \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-rm /tmp/github-pk.pem
+  | base64 -d \
+  | kubectl -n argocd create secret generic argocd-notifications-secret \
+      --from-file=github-privateKey=/dev/stdin \
+      --dry-run=client -o yaml \
+  | kubectl apply -f -
 ```
 
 If `argocd-notifications-secret` already exists with other tokens

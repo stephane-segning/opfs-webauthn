@@ -27,9 +27,15 @@ data:
   # Uses the same App as the repo-creds Secret. App must have
   # `Deployments: read & write` on the source repo (separate from
   # the `Contents: read` you already granted for source-fetch).
+  #
+  # Replace `<YOUR_APP_ID>` and `<YOUR_INSTALLATION_ID>` with the
+  # numeric IDs from the App settings page. They must match the
+  # IDs in your `repo-creds` Secret — easiest to copy verbatim:
+  #   kubectl -n argocd get secret <repo-creds-name> \
+  #     -o jsonpath='{.data.githubAppID}' | base64 -d
   service.github: |
-    appID: 2926172
-    installationID: 111820839
+    appID: <YOUR_APP_ID>
+    installationID: <YOUR_INSTALLATION_ID>
     privateKey: $github-privateKey
 
   # ─── Templates ─────────────────────────────────────────────────
@@ -65,7 +71,14 @@ data:
       # at "head of main at sync time" rather than a specific
       # commit. For per-app URL + Environment surfacing — what
       # the GitHub UI cares about — that's enough.
-      repoURLPath: '{{ "https://github.com/stephane-segning/opfs-webauthn" }}'
+      # The repo the GitHub service POSTs Deployments to. **Must
+      # be a repo your App is installed on with `Deployments: write`**
+      # — if the App can't reach this URL the controller logs
+      # 403/404 and no Deployment is created. For consumers
+      # tracking the upstream project directly, this is
+      # `https://github.com/stephane-segning/opfs-webauthn`; for
+      # forks, point at your fork.
+      repoURLPath: '{{ "https://github.com/<your-org>/<your-repo>" }}'
       revisionPath: '{{ "main" }}'
       deployment:
         # The Environment shown in the GitHub UI. Per-app, so
@@ -95,7 +108,14 @@ data:
     message: |
       Application {{.app.metadata.name}} sync failed or app is unhealthy.
     github:
-      repoURLPath: '{{ "https://github.com/stephane-segning/opfs-webauthn" }}'
+      # The repo the GitHub service POSTs Deployments to. **Must
+      # be a repo your App is installed on with `Deployments: write`**
+      # — if the App can't reach this URL the controller logs
+      # 403/404 and no Deployment is created. For consumers
+      # tracking the upstream project directly, this is
+      # `https://github.com/stephane-segning/opfs-webauthn`; for
+      # forks, point at your fork.
+      repoURLPath: '{{ "https://github.com/<your-org>/<your-repo>" }}'
       revisionPath: '{{ "main" }}'
       deployment:
         environment: '{{.app.metadata.name}}'
@@ -109,17 +129,26 @@ data:
   # ─── Triggers ──────────────────────────────────────────────────
   # `oncePer: app.status.sync.revision` makes sure we don't spam
   # GitHub with one Deployment per reconcile — only one per commit.
+  #
+  # `?.` optional chaining on `operationState`: ArgoCD's
+  # `app.status.operationState` is unset on fresh Applications
+  # before the first sync (and during certain reconcile gaps).
+  # A direct dereference would throw an expression-eval error
+  # and the trigger would silently fail to fire for that cycle.
+  # The notifications expression language (`expr-lang/expr`)
+  # supports `?.` for safe-navigate; an unset chain evaluates to
+  # `nil`, which `in ['Succeeded']` correctly returns false on.
   trigger.on-deployed: |
     - description: Application is synced and healthy. Once per commit.
       oncePer: app.status.sync.revision
       send: [app-deployed]
-      when: app.status.operationState.phase in ['Succeeded']
-              and app.status.health.status == 'Healthy'
+      when: app.status?.operationState.phase in ['Succeeded']
+              and app.status?.health.status == 'Healthy'
 
   # No `oncePer` on failure — every fresh failure should re-stamp,
   # so the GitHub Environment doesn't lie about a transient red.
   trigger.on-deploy-failed: |
     - description: Sync failed or app went unhealthy.
       send: [app-deployed-failed]
-      when: app.status.operationState.phase in ['Error', 'Failed']
-              or app.status.health.status in ['Degraded', 'Missing']
+      when: app.status?.operationState.phase in ['Error', 'Failed']
+              or app.status?.health.status in ['Degraded', 'Missing']
