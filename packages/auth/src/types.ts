@@ -36,6 +36,33 @@ export type EnrollOptions = {
 	 * WebAuthn ceremony.
 	 */
 	readonly userHandle?: Uint8Array;
+	/**
+	 * Which class of authenticator the browser may enroll. The library
+	 * default is `undefined` — any authenticator is acceptable. Apps
+	 * that need stricter posture override here.
+	 *
+	 * - `"platform"`: only authenticators built into the device
+	 *   (Touch ID, Windows Hello, Android biometrics). Excludes
+	 *   external security keys **and** password-manager
+	 *   authenticators (1Password, Bitwarden, …). Choose this when
+	 *   the vault holds data that must stay on this device — e.g.
+	 *   for a local-first app where syncing the key material through
+	 *   a third-party credential manager would defeat the data
+	 *   locality goal.
+	 * - `"cross-platform"`: only external authenticators (YubiKey,
+	 *   roaming Bitwarden, etc.). Rarely useful as a hard pin.
+	 * - `undefined`: any authenticator the browser surfaces. The
+	 *   library default.
+	 *
+	 * **Verification, not a guarantee**: this field is a *hint* to
+	 * the browser. Some browsers honour it strictly; others surface
+	 * cross-platform options anyway. `enroll` additionally checks
+	 * `credential.authenticatorAttachment` on the returned
+	 * credential and throws `AuthUnsupportedError` if it doesn't
+	 * match what you asked for, so the rejection is enforced
+	 * client-side.
+	 */
+	readonly authenticatorAttachment?: AuthenticatorAttachment;
 };
 
 export type UnlockOptions = {
