@@ -1,9 +1,23 @@
 {
 	"name": "@opfs/core-wasm",
 	"version": "0.1.0",
-	"private": true,
-	"description": "Generated wasm-bindgen wrapper for opfs-core. Crypto + repo + share-protocol exposed to JS.",
+	"description": "wasm-bindgen wrapper for opfs-core. AES-GCM vault, HKDF KEK derivation, X25519 share, BLAKE3 commitment — Rust crypto reachable from JS.",
 	"license": "MIT",
+	"author": "Stephane Segning <stephane.segning@gmail.com>",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/stephane-segning/opfs-webauthn.git",
+		"directory": "packages/core-wasm"
+	},
+	"homepage": "https://github.com/stephane-segning/opfs-webauthn/tree/main/packages/core-wasm#readme",
+	"bugs": "https://github.com/stephane-segning/opfs-webauthn/issues",
+	"keywords": [
+		"webauthn",
+		"wasm",
+		"encryption",
+		"aes-gcm",
+		"crypto"
+	],
 	"type": "module",
 	"exports": {
 		".": {
@@ -13,12 +27,19 @@
 	},
 	"files": [
 		"src",
-		"dist"
+		"dist",
+		"README.md",
+		"LICENSE"
 	],
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
 	"scripts": {
 		"build": "wasm-pack build ../../crates/core --target web --out-dir ../../packages/core-wasm/dist --out-name opfs_core --release",
 		"clean": "rm -rf dist",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"prepublishOnly": "pnpm run build"
 	},
 	"devDependencies": {
 		"typescript": "^5.8.2"

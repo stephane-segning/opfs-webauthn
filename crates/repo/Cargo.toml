@@ -5,13 +5,20 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
 rust-version.workspace = true
+readme = "README.md"
+keywords = ["webauthn", "encryption", "sqlite", "vault", "local-first"]
+categories = ["cryptography", "database"]
 
 [lints]
 workspace = true
 
 [dependencies]
-opfs-crypto = { path = "../crypto" }
+# Dual `path` + `version` so `cargo publish` works against
+# crates.io while local builds use the workspace source.
+opfs-crypto = { path = "../crypto", version = "0.1.0" }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 ciborium = { workspace = true }

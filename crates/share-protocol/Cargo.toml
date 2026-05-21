@@ -1,17 +1,27 @@
 [package]
 name = "opfs-share-protocol"
-description = "Typed envelope for the recipient-first rendezvous share flow."
+description = "CBOR envelope types for the recipient-first rendezvous share flow (ADR 0007)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
 rust-version.workspace = true
+readme = "README.md"
+keywords = ["webauthn", "share", "rendezvous", "cbor", "x25519"]
+categories = ["cryptography", "encoding"]
 
 [lints]
 workspace = true
 
 [dependencies]
-opfs-crypto = { path = "../crypto" }
+# Dual `path` + `version` — the path entry wins locally so workspace
+# devs always build from sources; the version entry is what
+# `cargo publish` writes into the published crate's Cargo.toml.
+# Without it, `cargo publish` errors with "all path dependencies
+# must have a version when publishing."
+opfs-crypto = { path = "../crypto", version = "0.1.0" }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 ciborium = { workspace = true }
