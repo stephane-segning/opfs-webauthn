@@ -41,7 +41,7 @@ describe("rowId codec", () => {
 
 	it("rejects non-Crockford characters", () => {
 		// Replace the last char with 'U' which is not in Crockford base32.
-		const bad = generateRowId().slice(0, ROW_ID_CHARS - 1) + "U";
+		const bad = `${generateRowId().slice(0, ROW_ID_CHARS - 1)}U`;
 		expect(() => decodeRowId(bad)).toThrow(/Crockford/);
 	});
 

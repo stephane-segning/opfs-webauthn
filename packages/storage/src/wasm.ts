@@ -49,7 +49,7 @@ function inBrowserLikeContext(): boolean {
 	);
 }
 
-async function loadNodeWasmBytes(): Promise<ArrayBuffer> {
+async function loadNodeWasmBytes(): Promise<Uint8Array> {
 	// Dynamic imports keep `node:fs` out of the browser bundle. The
 	// bundler can statically prove these never run in the browser
 	// because `inBrowserLikeContext` guards their call site.
@@ -63,14 +63,13 @@ async function loadNodeWasmBytes(): Promise<ArrayBuffer> {
 		"../../core-wasm/dist/opfs_core_bg.wasm",
 		import.meta.url,
 	);
-	const buf = await readFile(fileURLToPath(wasmUrl));
-	// Node's Buffer extends Uint8Array but isn't an ArrayBuffer.
-	// wasm-bindgen accepts BufferSource, so slice into a real
-	// ArrayBuffer to keep the type contract honest.
-	return buf.buffer.slice(
-		buf.byteOffset,
-		buf.byteOffset + buf.byteLength,
-	) as ArrayBuffer;
+	// Node's `Buffer` IS a `Uint8Array` (subclass), and wasm-bindgen's
+	// `init` accepts `BufferSource` — so we hand the bytes through
+	// without copying. The earlier shape sliced into an ArrayBuffer
+	// "to keep the type contract honest"; gemini correctly flagged
+	// that as a needless memcpy on a 30+ KiB buffer for every test
+	// file's `beforeAll`.
+	return readFile(fileURLToPath(wasmUrl));
 }
 
 /**

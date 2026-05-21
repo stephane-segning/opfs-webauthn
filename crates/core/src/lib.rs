@@ -196,11 +196,10 @@ pub fn aad_for(row_id: &str, field: &str) -> Vec<u8> {
 /// length is a fixed contract).
 #[wasm_bindgen(js_name = encodeRowId)]
 pub fn encode_row_id(bytes: &[u8]) -> Result<String, JsError> {
-    // `opfs_repo::Error` is `thiserror`-derived → `Display`, but
-    // doesn't implement the local `core::DisplayError` trait that
-    // `into_js_error` requires. Inline the `.to_string()` here to
-    // bridge the two error worlds without widening the local trait.
-    opfs_repo::encode_row_id(bytes).map_err(|e| JsError::new(&alloc::string::ToString::to_string(&e)))
+    // `opfs_repo::Error` is `thiserror`-derived → `Display`, so
+    // `.to_string()` is in scope without crossing the local
+    // `core::DisplayError` trait `into_js_error` requires.
+    opfs_repo::encode_row_id(bytes).map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Decode a 26-character Crockford-base32 row id back into its
@@ -209,7 +208,7 @@ pub fn encode_row_id(bytes: &[u8]) -> Result<String, JsError> {
 /// docs).
 #[wasm_bindgen(js_name = decodeRowId)]
 pub fn decode_row_id(id: &str) -> Result<Vec<u8>, JsError> {
-    opfs_repo::decode_row_id(id).map_err(|e| JsError::new(&alloc::string::ToString::to_string(&e)))
+    opfs_repo::decode_row_id(id).map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Length in bytes of a row id at rest (always 16).

@@ -27,6 +27,13 @@ export type EncryptedField = {
 	readonly ciphertext: Uint8Array;
 };
 
+// Module-level singletons. `TextEncoder` / `TextDecoder` are
+// stateless across calls, so reusing one instance avoids the
+// per-call allocator + V8 hidden-class churn that gemini flagged
+// — small, predictable win on the hot encrypt/decrypt loops.
+const ENCODER = new TextEncoder();
+const DECODER = new TextDecoder("utf-8", { fatal: true });
+
 function freshNonce(): Uint8Array {
 	const buf = new Uint8Array(AES_GCM_NONCE_LEN);
 	crypto.getRandomValues(buf);
@@ -49,7 +56,7 @@ export class RowCodec {
 		const ciphertext = this.#vault.encrypt(
 			nonce,
 			aad,
-			new TextEncoder().encode(plaintext),
+			ENCODER.encode(plaintext),
 		);
 		return { nonce, ciphertext };
 	}
@@ -65,6 +72,6 @@ export class RowCodec {
 			aad,
 			encrypted.ciphertext,
 		);
-		return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+		return DECODER.decode(bytes);
 	}
 }
