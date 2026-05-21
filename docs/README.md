@@ -30,6 +30,10 @@ found, raise a PR to fix the docs in the same change.
 - [0013 — Self-hosted frontend on Knative with cross-origin isolation](./adrs/0013-self-hosted-frontend.md)
 - [0014 — Runtime config for the share-backend URL](./adrs/0014-runtime-config.md)
 
+### Deploy references
+
+- [`deploy/kustomize-example/`](./deploy/kustomize-example/) — full kustomize overlay: ArgoCD Application patches + argocd-notifications config for GitHub Deployments
+
 ## Working agreement
 
 - Each material decision lands as a new ADR (status: Proposed → Accepted).
