@@ -55,7 +55,7 @@ sequenceDiagram
 ```
 
 The relay never sees the X25519 private keys or the plaintext. The
-commitment check (step 6) means **a malicious relay can't
+commitment check (step 9) means **a malicious relay can't
 substitute its own pubkey** for the recipient's — the sender would
 notice the mismatch and refuse to encrypt.
 

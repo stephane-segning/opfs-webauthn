@@ -26,16 +26,25 @@
 		}
 	},
 	"files": [
-		"src",
+		"dist",
 		"README.md"
 	],
 	"publishConfig": {
 		"access": "public",
-		"provenance": true
+		"provenance": true,
+		"exports": {
+			".": {
+				"types": "./dist/index.d.ts",
+				"import": "./dist/index.js"
+			}
+		}
 	},
 	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"clean": "rm -rf dist",
 		"test": "vitest run",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"prepublishOnly": "pnpm run clean && pnpm run build"
 	},
 	"dependencies": {
 		"@opfs/core-wasm": "workspace:*"

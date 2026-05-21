@@ -7,8 +7,11 @@ without ever exposing the raw key material to JavaScript.
 
 > [!NOTE]
 > This package drives the **browser ceremony**. The actual crypto
-> happens inside [`@opfs/core-wasm`][corewasm] — the PRF output and
-> the DEK never appear in JS-visible buffers.
+> happens inside [`@opfs/core-wasm`][corewasm] — the **DEK** and
+> the derived **KEK** never appear in JS-visible buffers. The PRF
+> output itself briefly crosses through JS (the WebAuthn API
+> returns it as a `Uint8Array`); the ceremony hands it to wasm
+> on the next tick without writing it anywhere.
 
 ## What it does
 

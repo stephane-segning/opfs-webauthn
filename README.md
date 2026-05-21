@@ -25,9 +25,12 @@ your data and your key material; a password manager syncs your
 master key; a recovery service can reset your access. opfs-webauthn
 makes a different trade:
 
-- **The key material never leaves your device.** The WebAuthn PRF
-  output is hashed into an AES-256-GCM KEK *inside* a WebAssembly
-  module — the raw key bytes are never visible to JavaScript.
+- **The key material never leaves your device.** The PRF output
+  briefly crosses into JS as a `Uint8Array` (the WebAuthn API
+  returns it that way), but the JS layer immediately hands it to
+  the WebAssembly module without writing it to storage; the
+  derived **KEK** and the **DEK** never appear in JS-visible
+  buffers at all.
 - **The data never leaves your device by default.** The notes
   database is SQLite running on
   [OPFS](https://web.dev/origin-private-file-system/) in the
@@ -109,11 +112,15 @@ flowchart LR
   style KEK fill:#fff4e6
 ```
 
-The **PRF output** and the **DEK** never appear in JS-visible byte
-buffers. The wasm module generates the DEK with `getrandom`, wraps
-it with the KEK, and only exposes the wrapped blob + the unwrapped
-vault handle back to JS. See
-[ADR 0005](docs/adrs/0005-webauthn-prf-key-derivation.md).
+The **DEK** and the derived **KEK** never appear in JS-visible
+byte buffers. The wasm module generates the DEK with `getrandom`,
+wraps it with the KEK, and only exposes the wrapped blob + the
+unwrapped vault handle back to JS. The PRF output *does* cross
+through JS — the WebAuthn API returns it as a `Uint8Array` — but
+the JS layer immediately hands it to wasm without persisting it
+anywhere; see [ADR 0005][adr0005] for the chain of custody.
+
+[adr0005]: docs/adrs/0005-webauthn-prf-key-derivation.md
 
 ## Repository layout
 

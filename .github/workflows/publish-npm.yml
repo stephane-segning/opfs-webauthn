@@ -71,15 +71,38 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build wasm (if publishing core-wasm)
-        if: inputs.package == 'core-wasm'
-        # The published @opfs/core-wasm tarball SHIPS the wasm-pack
-        # output in dist/. The `prepublishOnly` script also runs it,
-        # but doing it here surfaces compile failures before the
-        # publish attempt instead of in the middle of one.
+      - name: Read package version
+        id: ver
+        # Resolve the package's version once, up-front. Used for the
+        # dep-order check, the post-publish verification, and the
+        # core-wasm dep existence probe — all want the *immutable*
+        # version string, not the mutable dist-tag.
         run: |
-          curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
-          pnpm --filter "@opfs/${{ inputs.package }}" build
+          version=$(node -p "require('./packages/${{ inputs.package }}/package.json').version")
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Package version: ${version}"
+
+      # ─── wasm-pack install (always, not just for core-wasm) ────
+      # Both `auth` and `share-client` re-export through
+      # `@opfs/core-wasm/src/index.ts`, which imports
+      # `../dist/opfs_core.js`. Without that file the typecheck
+      # step fails with TS2307. So we always build the wasm
+      # artifact, even when publishing a non-wasm package — it's
+      # a transitive build-time requirement.
+      #
+      # `jetli/wasm-pack-action` pins wasm-pack to a known version
+      # rather than running `curl ... | sh` from a mutable URL.
+      # The action is itself pinned to a SHA so a compromised tag
+      # can't redirect the install. Version of wasm-pack matches
+      # `WASM_PACK_VERSION` in `apps/web/Dockerfile` for build
+      # reproducibility across the project.
+      - name: Install wasm-pack (pinned)
+        uses: jetli/wasm-pack-action@0d68b7cd927660529b8ad3b58c2a05bcaeb16dcb # v0.4.0
+        with:
+          version: "v0.13.1"
+
+      - name: Build @opfs/core-wasm (always — transitive dep)
+        run: pnpm --filter @opfs/core-wasm build
 
       - name: Typecheck
         run: pnpm --filter "@opfs/${{ inputs.package }}" typecheck
@@ -92,11 +115,33 @@ jobs:
             pnpm --filter "@opfs/${{ inputs.package }}" test
           fi
 
+      # ─── dependency-order check (auth / share-client only) ─────
+      # Both packages depend on @opfs/core-wasm. `pnpm publish`
+      # rewrites `workspace:*` to the resolved version at publish
+      # time — typically the dependent's current version. If that
+      # version of @opfs/core-wasm isn't already published, the
+      # tarball we ship references a non-existent dep and the
+      # published package can't be installed.
+      #
+      # `npm view <name>@<version>` exits non-zero if the version
+      # doesn't exist on the registry.
+      - name: Check dependency is published
+        if: inputs.package == 'auth' || inputs.package == 'share-client'
+        env:
+          DEP_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          echo "Verifying @opfs/core-wasm@${DEP_VERSION} is reachable on npm..."
+          if ! npm view "@opfs/core-wasm@${DEP_VERSION}" version >/dev/null 2>&1; then
+            echo "::error::@opfs/core-wasm@${DEP_VERSION} is not on the registry. Publish @opfs/core-wasm first."
+            exit 1
+          fi
+          echo "OK — dep is reachable."
+
       - name: Pack — verify what would ship
         run: |
           # `npm pack --dry-run` walks `files:` and prints the tarball
           # contents without producing a .tgz. Useful sanity-check
-          # that `LICENSE`/`README.md`/`dist/` are all included.
+          # that `dist/`/`README.md` are all included.
           pnpm --filter "@opfs/${{ inputs.package }}" pack --dry-run
 
       - name: Publish
@@ -105,9 +150,9 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           # `pnpm publish` honours `publishConfig` in package.json
-          # (access: public; provenance: true) and rewrites
-          # `workspace:*` deps to the resolved version at publish
-          # time.
+          # (access: public; provenance: true; exports rewritten to
+          # dist/) and rewrites `workspace:*` deps to the resolved
+          # version at publish time.
           pnpm --filter "@opfs/${{ inputs.package }}" publish \
             --access public \
             --tag "${{ inputs.tag }}" \
@@ -116,12 +161,17 @@ jobs:
 
       - name: Verify provenance attestation (post-publish)
         if: inputs.dry-run == false
+        env:
+          PUBLISHED_VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          # Pull the just-published version and confirm its provenance
-          # signature verifies. `npm audit signatures` checks every
-          # installed package against its publisher's attestation +
-          # the Sigstore transparency log.
+          # Install by *immutable* version, not by dist-tag. Tags
+          # like `latest` are mutable and can briefly point at an
+          # older release; using `@<tag>` would let the attestation
+          # check pass for the wrong artifact and still report
+          # success. The version came from the package.json we
+          # already published, so it's the exact thing we want to
+          # verify.
           mkdir /tmp/verify && cd /tmp/verify
           npm init -y >/dev/null
-          npm install "@opfs/${{ inputs.package }}@${{ inputs.tag }}"
+          npm install "@opfs/${{ inputs.package }}@${PUBLISHED_VERSION}"
           npm audit signatures

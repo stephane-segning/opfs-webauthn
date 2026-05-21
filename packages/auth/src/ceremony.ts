@@ -149,15 +149,29 @@ export async function enroll(options?: EnrollOptions): Promise<{
 	// `authenticatorAttachment`; if the user enrolled with something
 	// the caller said no to, reject the credential rather than wrap
 	// data with a key the user doesn't expect to be where it is.
-	if (
-		requestedAttachment &&
-		credential.authenticatorAttachment &&
-		credential.authenticatorAttachment !== requestedAttachment
-	) {
-		throw new AuthUnsupportedError(
-			`enrollment requested authenticator attachment "${requestedAttachment}" ` +
-				`but the user picked "${credential.authenticatorAttachment}"`,
-		);
+	//
+	// **Reject on unknown too.** Some browsers / authenticators omit
+	// `authenticatorAttachment` from the credential entirely
+	// (returns `null` or undefined). If the caller asked for a
+	// specific attachment, we can't verify the actual one is what
+	// they wanted — fail closed, because the alternative is silently
+	// accepting a cross-platform credential when the app explicitly
+	// asked for platform-only.
+	if (requestedAttachment) {
+		const actual = credential.authenticatorAttachment;
+		if (!actual) {
+			throw new AuthUnsupportedError(
+				`enrollment requested authenticator attachment "${requestedAttachment}" ` +
+					"but the browser did not report the credential's actual attachment; " +
+					"unable to verify the request was honoured",
+			);
+		}
+		if (actual !== requestedAttachment) {
+			throw new AuthUnsupportedError(
+				`enrollment requested authenticator attachment "${requestedAttachment}" ` +
+					`but the user picked "${actual}"`,
+			);
+		}
 	}
 
 	let prfOutput = readPrfResult(credential);
