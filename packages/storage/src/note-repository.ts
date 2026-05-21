@@ -38,6 +38,11 @@ ON CONFLICT(id) DO UPDATE SET
 
 const ARCHIVE_SQL = "UPDATE notes SET archived = 1 WHERE id = ?";
 
+const SELECT_BY_ID_SQL = `
+SELECT ${SELECT_NOTE_COLS}
+FROM notes
+WHERE id = ?`;
+
 export type ListPageInput = {
 	readonly limit: number;
 	readonly cursor: string | null;
@@ -137,5 +142,17 @@ LIMIT ?`;
 
 	archive(id: string): void {
 		this.#db.exec(ARCHIVE_SQL, [decodeRowId(id)]);
+	}
+
+	/**
+	 * Fetch a single encrypted row by id. Returns `null` when no row
+	 * matches — the page layer surfaces that as "note doesn't exist"
+	 * without an exception, which the UI's edit-then-archive flow can
+	 * encounter when two tabs race on the same id.
+	 */
+	get(id: string): EncryptedNoteRow | null {
+		const rows = this.#db.query(SELECT_BY_ID_SQL, [decodeRowId(id)]);
+		const first = rows[0];
+		return first ? decodeRow(first) : null;
 	}
 }

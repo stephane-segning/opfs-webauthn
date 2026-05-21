@@ -3,14 +3,30 @@
  * + handlers live in one shared address space, satisfying ADR 0006's
  * "single writer across tabs" requirement. The browser tears the
  * worker down when the last tab closes.
+ *
+ * `tx-applied` rides a `BroadcastChannel` rather than fanning out
+ * per-port: the BC carries the message to every tab's page-side
+ * channel (including the originator), so the page never has to
+ * route notifications back through the RPC layer.
  */
 
 /// <reference lib="webworker" />
 
 import { Connection, type PortLike } from "./connection.js";
-import { dispatch } from "./worker-handlers.js";
+import { openOpfsDatabase } from "./database.js";
+import { TX_APPLIED_CHANNEL } from "./multi-tab.js";
+import { createDispatcher } from "./worker-handlers.js";
 
 declare const self: SharedWorkerGlobalScope;
+
+const DB_FILENAME = "opfs-webauthn-notes.sqlite";
+
+const txChannel = new BroadcastChannel(TX_APPLIED_CHANNEL);
+
+const dispatch = createDispatcher({
+	openDatabase: () => openOpfsDatabase(DB_FILENAME),
+	broadcast: (notification) => txChannel.postMessage(notification),
+});
 
 self.addEventListener("connect", (event) => {
 	const connectEvent = event as MessageEvent;
