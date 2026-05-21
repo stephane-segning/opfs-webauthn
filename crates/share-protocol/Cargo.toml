@@ -16,12 +16,12 @@ categories = ["cryptography", "encoding"]
 workspace = true
 
 [dependencies]
-# Dual `path` + `version` — the path entry wins locally so workspace
-# devs always build from sources; the version entry is what
-# `cargo publish` writes into the published crate's Cargo.toml.
-# Without it, `cargo publish` errors with "all path dependencies
-# must have a version when publishing."
-opfs-crypto = { path = "../crypto", version = "0.1.0" }
+# Workspace-managed `version + path` so bumps to opfs-crypto only
+# need editing one entry in the root Cargo.toml's
+# `[workspace.dependencies]`. Without `workspace = true`, the
+# version would be hard-coded here and silently drift away from
+# the actual crate version on a bump.
+opfs-crypto = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 ciborium = { workspace = true }

@@ -16,9 +16,10 @@ categories = ["cryptography", "database"]
 workspace = true
 
 [dependencies]
-# Dual `path` + `version` so `cargo publish` works against
-# crates.io while local builds use the workspace source.
-opfs-crypto = { path = "../crypto", version = "0.1.0" }
+# Workspace-managed `version + path` — single source of truth
+# in the root Cargo.toml's `[workspace.dependencies]`. Avoids
+# the hard-coded `0.1.0` drift codex flagged on PR #40.
+opfs-crypto = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 ciborium = { workspace = true }

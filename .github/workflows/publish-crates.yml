@@ -43,19 +43,28 @@ jobs:
     name: "publish ${{ inputs.crate }} (dry-run=${{ inputs.dry-run }})"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Every `uses:` in this file pins to a full-length commit SHA.
+      # Release workflows handle `CRATES_IO_TOKEN`; a compromised/
+      # retargeted mutable tag could exfil the token or alter the
+      # published artifact. SHA pinning is the only immutable
+      # reference GitHub provides. Comments next to each entry
+      # note the version the SHA corresponds to so Dependabot
+      # bumps stay reviewable.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Rust
-        # `dtolnay/rust-toolchain` is the conventional Rust setup
-        # action; pin to a date-stable channel rather than `stable`
-        # to keep the publish run reproducible across toolchain
-        # releases.
-        uses: dtolnay/rust-toolchain@stable
+        # `dtolnay/rust-toolchain` doesn't tag releases — pin to
+        # the head of the `stable` branch as of this commit. The
+        # action just installs whatever `rustup default stable`
+        # resolves to at run time, so toolchain reproducibility
+        # comes from `rust-toolchain.toml` (or workspace
+        # `rust-version`), not from the action SHA.
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: clippy, rustfmt
 
       - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@5cb072d7354962be830356aa6b146f7612846014 # v2.7.5
         with:
           # One cache per crate keeps the workspace's other builds
           # from invalidating it. crates.io publishes are
