@@ -1,0 +1,127 @@
+name: Publish npm package
+
+# Manual-only publish workflow for the @opfs/* packages. The publish
+# is a deliberate human-driven action — never `on: push` — for two
+# reasons:
+#
+#   1. Tag-on-merge isn't reliable for libraries that release on a
+#      different cadence than the app. Different consumers; different
+#      semver pressures.
+#   2. A misclick on `main` could publish a breaking change. Requiring
+#      `workflow_dispatch` keeps that out of muscle-memory range.
+#
+# Pre-flight: bump the package's `version` field in its `package.json`,
+# commit + push, then trigger this workflow from the Actions UI and
+# pick the package + tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to publish (without @opfs/ prefix)"
+        required: true
+        type: choice
+        options:
+          - auth
+          - share-client
+          - core-wasm
+      tag:
+        description: "npm dist-tag (latest for stable; next/beta/alpha for prereleases)"
+        required: true
+        type: choice
+        default: latest
+        options:
+          - latest
+          - next
+          - beta
+          - alpha
+      dry-run:
+        description: "Pack + verify only, do not publish"
+        required: true
+        type: boolean
+        default: true
+
+# `id-token: write` enables npm provenance attestations — npm asks
+# Sigstore to sign a record of "this tarball came from this repo +
+# commit + workflow run", and the result lands on the published
+# package page. Consumers can verify with `npm audit signatures`.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: "publish @opfs/${{ inputs.package }} (dry-run=${{ inputs.dry-run }})"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node + pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          # The setup-node action wires `~/.npmrc` to use this URL +
+          # `NODE_AUTH_TOKEN` for auth. Provenance only works against
+          # the public registry.
+          registry-url: "https://registry.npmjs.org"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build wasm (if publishing core-wasm)
+        if: inputs.package == 'core-wasm'
+        # The published @opfs/core-wasm tarball SHIPS the wasm-pack
+        # output in dist/. The `prepublishOnly` script also runs it,
+        # but doing it here surfaces compile failures before the
+        # publish attempt instead of in the middle of one.
+        run: |
+          curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          pnpm --filter "@opfs/${{ inputs.package }}" build
+
+      - name: Typecheck
+        run: pnpm --filter "@opfs/${{ inputs.package }}" typecheck
+
+      - name: Tests (where applicable)
+        run: |
+          # Some publishable packages don't have unit tests yet.
+          # Run if the script exists, skip otherwise.
+          if pnpm --filter "@opfs/${{ inputs.package }}" run | grep -q "^  test"; then
+            pnpm --filter "@opfs/${{ inputs.package }}" test
+          fi
+
+      - name: Pack — verify what would ship
+        run: |
+          # `npm pack --dry-run` walks `files:` and prints the tarball
+          # contents without producing a .tgz. Useful sanity-check
+          # that `LICENSE`/`README.md`/`dist/` are all included.
+          pnpm --filter "@opfs/${{ inputs.package }}" pack --dry-run
+
+      - name: Publish
+        if: inputs.dry-run == false
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # `pnpm publish` honours `publishConfig` in package.json
+          # (access: public; provenance: true) and rewrites
+          # `workspace:*` deps to the resolved version at publish
+          # time.
+          pnpm --filter "@opfs/${{ inputs.package }}" publish \
+            --access public \
+            --tag "${{ inputs.tag }}" \
+            --no-git-checks \
+            --provenance
+
+      - name: Verify provenance attestation (post-publish)
+        if: inputs.dry-run == false
+        run: |
+          # Pull the just-published version and confirm its provenance
+          # signature verifies. `npm audit signatures` checks every
+          # installed package against its publisher's attestation +
+          # the Sigstore transparency log.
+          mkdir /tmp/verify && cd /tmp/verify
+          npm init -y >/dev/null
+          npm install "@opfs/${{ inputs.package }}@${{ inputs.tag }}"
+          npm audit signatures
