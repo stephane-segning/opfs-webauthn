@@ -3,15 +3,15 @@
  * worker. The page constructs a `WorkerClient` once per session; each
  * request carries a numeric `id` so concurrent calls don't race.
  *
- * Per ADR 0006 the worker is the sole writer. Reads also go through it
- * to keep a single coherent view.
+ * Per ADR 0006 the worker is the sole writer. Reads also go through
+ * it to keep a single coherent view. Fan-out notifications
+ * (`tx-applied`) do **not** ride this channel — they go over a
+ * `BroadcastChannel` (see `multi-tab.ts`). That keeps the RPC
+ * envelope strictly request/response so per-tab `MessagePort`s never
+ * have to filter notifications they don't need.
  */
 
-import type {
-	EncryptedNoteRow,
-	NoteRowInput,
-	StorageEventName,
-} from "./row.js";
+import type { EncryptedNoteRow, NoteRowInput } from "./row.js";
 
 /** Wire messages from the page to the worker. */
 export type WorkerRequest =
@@ -24,6 +24,7 @@ export type WorkerRequest =
 			readonly includeArchived: boolean;
 	  }
 	| { readonly kind: "upsertNote"; readonly row: NoteRowInput }
+	| { readonly kind: "getNote"; readonly id: string }
 	| { readonly kind: "archiveNote"; readonly id: string }
 	| { readonly kind: "close" };
 
@@ -37,10 +38,16 @@ export type WorkerResponse =
 			readonly nextCursor: string | null;
 	  }
 	| { readonly kind: "upsertNote"; readonly row: EncryptedNoteRow }
+	| { readonly kind: "getNote"; readonly row: EncryptedNoteRow | null }
 	| { readonly kind: "archiveNote" }
 	| { readonly kind: "close" };
 
-/** Worker-emitted notifications. Broadcast, not request-scoped. */
+/**
+ * Notifications the worker emits over the `BroadcastChannel`
+ * declared in `multi-tab.ts`. They never appear on `ServerEnvelope`
+ * — kept here so the producer (`worker-handlers.ts`) and the
+ * consumer (`multi-tab.ts`) speak the same shape.
+ */
 export type WorkerNotification = {
 	readonly kind: "tx-applied";
 	readonly ids: readonly string[];
@@ -57,11 +64,7 @@ type ServerEnvelope =
 			readonly id: number;
 			readonly response: WorkerResponse;
 	  }
-	| { readonly kind: "error"; readonly id: number; readonly message: string }
-	| {
-			readonly kind: "notification";
-			readonly notification: WorkerNotification;
-	  };
+	| { readonly kind: "error"; readonly id: number; readonly message: string };
 
 /** Build a success envelope for request `id`. */
 export const respond = (
@@ -78,12 +81,6 @@ export const fail = (id: number, message: string): ServerEnvelope => ({
 	kind: "error",
 	id,
 	message,
-});
-
-/** Build a broadcast notification envelope (no `id`). */
-export const notify = (notification: WorkerNotification): ServerEnvelope => ({
-	kind: "notification",
-	notification,
 });
 
 type Pending = {
@@ -122,7 +119,6 @@ export class WorkerClient {
 	readonly #worker: WorkerLike;
 	#pending = new Map<number, Pending>();
 	#nextId = 1;
-	#listeners = new Map<StorageEventName, Set<(payload: unknown) => void>>();
 
 	constructor(worker: WorkerLike) {
 		this.#worker = worker;
@@ -155,13 +151,6 @@ export class WorkerClient {
 				this.#pending.delete(data.id);
 				pending.reject(new Error(data.message));
 			}
-			return;
-		}
-		if (data.kind === "notification") {
-			const listeners = this.#listeners.get(data.notification.kind);
-			if (listeners) {
-				for (const fn of listeners) fn(data.notification);
-			}
 		}
 	};
 
@@ -186,21 +175,6 @@ export class WorkerClient {
 			);
 		}
 		return response as Extract<WorkerResponse, { kind: R["kind"] }>;
-	}
-
-	on<K extends StorageEventName>(
-		kind: K,
-		listener: (event: WorkerNotification & { readonly kind: K }) => void,
-	): () => void {
-		let set = this.#listeners.get(kind);
-		if (!set) {
-			set = new Set();
-			this.#listeners.set(kind, set);
-		}
-		set.add(listener as (payload: unknown) => void);
-		return () => {
-			set?.delete(listener as (payload: unknown) => void);
-		};
 	}
 
 	terminate(): void {

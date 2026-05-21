@@ -4,8 +4,13 @@
  * or a single client port of a `SharedWorker`).
  *
  * Single-responsibility: own the message loop for one client. The
- * handlers know nothing about transports; the broadcast registry
- * iterates connections, not ports.
+ * handlers know nothing about transports; the worker entries
+ * instantiate one `Connection` per client port.
+ *
+ * Notifications (`tx-applied`) do not flow through `Connection` —
+ * they ride a `BroadcastChannel` per ADR 0006 so every tab,
+ * including non-RPC peers, hears every write without the worker
+ * having to enumerate live ports.
  */
 
 import type {
@@ -33,9 +38,6 @@ export type PortLike = {
 
 export type Dispatch = (request: WorkerRequest) => Promise<WorkerResponse>;
 
-/** All live connections in this worker process. */
-const connections = new Set<Connection>();
-
 export class Connection {
 	readonly #port: PortLike;
 	readonly #dispatch: Dispatch;
@@ -45,7 +47,6 @@ export class Connection {
 		this.#dispatch = dispatch;
 		port.addEventListener("message", this.#onMessage);
 		port.start?.();
-		connections.add(this);
 	}
 
 	post(envelope: ServerEnvelope): void {
@@ -53,15 +54,13 @@ export class Connection {
 	}
 
 	/**
-	 * Detach this connection from its port and from the live-set so
-	 * `broadcastTxApplied` stops iterating it. Called when the client
-	 * sends `close`; SharedWorker has no port-disconnect event, so this
-	 * cooperative signal is the only deterministic cleanup path.
+	 * Detach this connection from its port. Called when the client
+	 * sends `close`; SharedWorker has no port-disconnect event, so
+	 * this cooperative signal is the only deterministic cleanup path.
 	 */
 	dispose(): void {
 		this.#port.removeEventListener("message", this.#onMessage);
 		this.#port.close?.();
-		connections.delete(this);
 	}
 
 	#onMessage = (event: MessageEvent<ClientEnvelope>): void => {
@@ -76,9 +75,4 @@ export class Connection {
 				this.post(fail(id, message));
 			});
 	};
-}
-
-/** Iterate all connections — used by the handlers to broadcast events. */
-export function eachConnection(fn: (connection: Connection) => void): void {
-	for (const c of connections) fn(c);
 }

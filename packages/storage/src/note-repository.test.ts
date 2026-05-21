@@ -17,6 +17,9 @@ type Capture = { sql: string; bind: readonly unknown[] };
  */
 class FakeDatabase implements Database {
 	readonly execs: Capture[] = [];
+	// `unknown[][]` keeps the seed values lax for fixture builders;
+	// the `Database.query` signature is `SqlValue[][]`, so we cast at
+	// the return boundary instead of widening that interface.
 	queryResults: unknown[][] = [];
 	lastQuery: Capture | null = null;
 
@@ -24,9 +27,9 @@ class FakeDatabase implements Database {
 		this.execs.push({ sql, bind });
 	}
 
-	query(sql: string, bind: readonly unknown[] = []): unknown[][] {
+	query(sql: string, bind: readonly unknown[] = []): never[][] {
 		this.lastQuery = { sql, bind };
-		return this.queryResults;
+		return this.queryResults as never[][];
 	}
 
 	close(): void {}

@@ -6,11 +6,18 @@
  *
  * and the read path in reverse. The worker never sees plaintext; the
  * codec is the only thing that holds the `CryptoVault`.
+ *
+ * `subscribeTxApplied` listens on the multi-tab
+ * `BroadcastChannel` rather than the RPC port: every tab — including
+ * the originating one — hears every successful write through the same
+ * channel (ADR 0006). The Repo doesn't need to know which transport
+ * (SharedWorker / DedicatedWorker) is underneath.
  */
 
 import type { CryptoVault } from "@opfs/core-wasm";
 
 import { generateRowId } from "./id.js";
+import { subscribeTxApplied } from "./multi-tab.js";
 import type { EncryptedNoteRow } from "./row.js";
 import { RowCodec } from "./row-codec.js";
 import type { WorkerClient } from "./rpc.js";
@@ -88,6 +95,18 @@ export class Repo {
 		};
 	}
 
+	/**
+	 * Fetch a single note by id. Returns `null` when no row matches
+	 * (e.g. another tab archived-then-purged it between list + get).
+	 * The plaintext fields are decrypted under this `Repo`'s vault —
+	 * a mismatched vault throws an AEAD verification error from
+	 * `CryptoVault.decrypt`, which is the right loud failure mode.
+	 */
+	async getNote(id: string): Promise<Note | null> {
+		const res = await this.#client.send({ kind: "getNote", id });
+		return res.row ? this.#decryptRow(res.row) : null;
+	}
+
 	async archiveNote(id: string): Promise<void> {
 		await this.#client.send({ kind: "archiveNote", id });
 	}
@@ -100,8 +119,17 @@ export class Repo {
 		}
 	}
 
+	/**
+	 * Subscribe to `tx-applied` events fan-out by the worker over the
+	 * shared `BroadcastChannel`. Returns an unsubscribe function. The
+	 * originating tab also receives its own writes — the listener is
+	 * the right place to invalidate a UI cache without manually
+	 * propagating from each mutation site.
+	 */
 	subscribeTxApplied(listener: (ids: readonly string[]) => void): () => void {
-		return this.#client.on("tx-applied", (event) => listener(event.ids));
+		return subscribeTxApplied((notification) => {
+			if (notification.kind === "tx-applied") listener(notification.ids);
+		});
 	}
 
 	#encryptNote(input: {
