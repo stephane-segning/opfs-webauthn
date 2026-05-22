@@ -154,6 +154,14 @@ function NotesView({
 		setSelection(NO_SELECTION);
 	}
 
+	async function destroy(id: string) {
+		// Hard delete goes through the store's `delete` action — not
+		// `repo.deleteNote` directly — so the optimistic reload +
+		// tx-applied wiring fires through the same path archive uses.
+		await snapshot.delete(id);
+		setSelection(NO_SELECTION);
+	}
+
 	function onReceived(note: Note) {
 		// Surfacing the received note as the next edit target lets the
 		// recipient verify what landed before going back to the list.
@@ -168,6 +176,7 @@ function NotesView({
 					note={selection.note}
 					onArchive={selection.note ? archive : undefined}
 					onCancel={() => setSelection(NO_SELECTION)}
+					onDelete={selection.note ? destroy : undefined}
 					onSave={saveDraft}
 					onShare={
 						shareConfig.enabled && selection.note

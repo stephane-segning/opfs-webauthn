@@ -76,5 +76,6 @@ const emptySnapshot: NotesStoreSnapshot = {
 		throw new Error("store not mounted");
 	},
 	archive: async () => {},
+	delete: async () => {},
 	setShowArchived: () => {},
 };

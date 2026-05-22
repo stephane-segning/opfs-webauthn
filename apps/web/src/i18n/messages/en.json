@@ -70,11 +70,19 @@
 			"cancel": "Cancel",
 			"save": "Save",
 			"archive": "Archive",
+			"delete": "Delete forever",
 			"share": "Share to another device",
 			"titleLabel": "Title",
 			"bodyLabel": "Body",
 			"titlePlaceholder": "Title",
 			"bodyPlaceholder": "Write something only you can read."
+		},
+		"deleteDialog": {
+			"region": "Confirm delete",
+			"title": "Delete this note?",
+			"blurb": "This cannot be undone. Archive instead if you want to keep the option to recover it.",
+			"cancel": "Cancel",
+			"confirm": "Delete forever"
 		}
 	},
 	"share": {

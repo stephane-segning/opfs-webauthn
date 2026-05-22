@@ -203,6 +203,35 @@ describe("BroadcastChannel multi-tab fan-out", () => {
 		}
 	});
 
+	it("deleteNote also fans out the affected id", async () => {
+		const db = await openInMemoryDatabase();
+		const tx = makeTxBroadcaster();
+		const dispatch = createDispatcher({
+			openDatabase: async () => db,
+			broadcast: tx.broadcast,
+		});
+		const { page, worker } = makeLoopback();
+		new Connection(worker, dispatch);
+		const client = new WorkerClient(page);
+		const repo = new Repo(client, makeVault());
+		await repo.bootstrap();
+
+		const note = await repo.upsertNote({ title: "doomed", body: "y" });
+
+		const received: string[] = [];
+		const unsubscribe = subscribeTxApplied((n) => {
+			if (n.kind === "tx-applied") received.push(...n.ids);
+		});
+		try {
+			await repo.deleteNote(note.id);
+			await waitFor(() => received.includes(note.id));
+			expect(received).toContain(note.id);
+		} finally {
+			unsubscribe();
+			db.close();
+		}
+	});
+
 	it("archiveNote also fans out the affected id", async () => {
 		const db = await openInMemoryDatabase();
 		const tx = makeTxBroadcaster();
