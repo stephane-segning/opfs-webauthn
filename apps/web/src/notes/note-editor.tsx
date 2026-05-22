@@ -104,6 +104,14 @@ export function NoteEditor({
 			setConfirmingDelete(false);
 		});
 	};
+	// On cancel, also clear any prior delete error so re-opening the
+	// dialog starts clean. The error otherwise lingers until the next
+	// successful run-guard cycle, which would surface a stale message
+	// the moment the user re-opens the confirm prompt.
+	const handleCancelDelete = () => {
+		setConfirmingDelete(false);
+		setError(null);
+	};
 
 	return (
 		<section aria-label={t("editor.region")} className="note-editor">
@@ -125,7 +133,7 @@ export function NoteEditor({
 					{t("editor.save")}
 				</button>
 			</header>
-			{error ? (
+			{error && !confirmingDelete ? (
 				<p className="auth-error" role="alert">
 					{error}
 				</p>
@@ -182,7 +190,8 @@ export function NoteEditor({
 			{confirmingDelete && note && onDelete ? (
 				<DeleteConfirmDialog
 					busy={busy}
-					onCancel={() => setConfirmingDelete(false)}
+					error={error}
+					onCancel={handleCancelDelete}
 					onConfirm={handleConfirmDelete}
 				/>
 			) : null}
@@ -197,14 +206,28 @@ export function NoteEditor({
  * brief — no `window.confirm` is allowed since native popups can't
  * be themed and don't carry our i18n strings.
  */
-function DeleteConfirmDialog({
+export function DeleteConfirmDialog({
 	busy,
+	error,
 	onCancel,
 	onConfirm,
 }: {
 	readonly busy: boolean;
+	/**
+	 * Last delete-failure message, or `null` if none. Rendered *inside*
+	 * the dialog rather than the editor backdrop — the modal `<dialog>`
+	 * obscures the editor, so an error painted behind it would be
+	 * invisible and the user would only see the disabled-then-enabled
+	 * confirm button with no explanation of why deletion failed.
+	 */
+	readonly error: string | null;
 	readonly onCancel: () => void;
-	readonly onConfirm: () => void;
+	/**
+	 * Returns a `Promise` because the underlying handler awaits the
+	 * store action; typing it as `void | Promise<void>` keeps callers
+	 * honest without forcing every test fixture to be async.
+	 */
+	readonly onConfirm: () => void | Promise<void>;
 }) {
 	const t = useTranslations("notes.deleteDialog");
 	const ref = useModalDialog(onCancel);
@@ -219,6 +242,11 @@ function DeleteConfirmDialog({
 			</header>
 			<div className="share-dialog-body">
 				<p className="share-blurb">{t("blurb")}</p>
+				{error ? (
+					<p className="auth-error" role="alert">
+						{error}
+					</p>
+				) : null}
 				<div className="delete-confirm-actions">
 					<button
 						className="auth-link"
