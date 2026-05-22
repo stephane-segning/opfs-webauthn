@@ -39,7 +39,9 @@ describe("HEARTBEAT_INTERVAL_MS", () => {
 type Harness = {
 	readonly coord: IdleLockCoordinator;
 	readonly onLock: ReturnType<typeof vi.fn>;
-	readonly publish: ReturnType<typeof vi.fn<(msg: VaultChannelMessage) => void>>;
+	readonly publish: ReturnType<
+		typeof vi.fn<(msg: VaultChannelMessage) => void>
+	>;
 	advance(ms: number): void;
 	clock(): number;
 };
