@@ -5,6 +5,8 @@
  *   - the loaded note list (paged through to completion so we never
  *     silently truncate),
  *   - upsert / archive commands that go straight to the repo,
+ *   - a `showArchived` flag that drives `includeArchived` on the
+ *     `listNotes` call; toggling it triggers a reload,
  *   - a `tx-applied` subscription so other tabs' writes flow back in.
  *
  * Last-writer-wins reload guard: every reload bumps a monotonically
@@ -26,9 +28,16 @@ export type NotesState =
 
 export type NotesStoreSnapshot = {
 	readonly state: NotesState;
+	/** Whether archived notes are included in the loaded list. */
+	readonly showArchived: boolean;
 	readonly reload: () => Promise<void>;
 	readonly upsert: (note: NoteInput) => Promise<Note>;
 	readonly archive: (id: string) => Promise<void>;
+	/**
+	 * Toggle the archived-visibility flag. Immediately triggers a
+	 * reload so the new state is consistent with what's on disk.
+	 */
+	readonly setShowArchived: (show: boolean) => void;
 };
 
 /** Internal slice — `generation` is hidden from consumers. */
@@ -38,11 +47,18 @@ type Internal = NotesStoreSnapshot & {
 
 export type NotesStore = StoreApi<NotesStoreSnapshot>;
 
-async function loadAllNotes(repo: Repo): Promise<readonly Note[]> {
+async function loadAllNotes(
+	repo: Repo,
+	includeArchived: boolean,
+): Promise<readonly Note[]> {
 	const collected: Note[] = [];
 	let cursor: string | null = null;
 	for (let i = 0; i < MAX_PAGES; i++) {
-		const page = await repo.listNotes({ limit: PAGE_SIZE, cursor });
+		const page = await repo.listNotes({
+			limit: PAGE_SIZE,
+			cursor,
+			includeArchived,
+		});
 		collected.push(...page.notes);
 		if (!page.nextCursor) return collected;
 		cursor = page.nextCursor;
@@ -72,7 +88,7 @@ export function createNotesStore(repo: Repo): {
 			const next = get().generation + 1;
 			set({ generation: next });
 			try {
-				const notes = await loadAllNotes(repo);
+				const notes = await loadAllNotes(repo, get().showArchived);
 				if (isLatest(next)) {
 					set({ state: { status: "ready", notes } });
 				}
@@ -91,6 +107,7 @@ export function createNotesStore(repo: Repo): {
 		return {
 			state: { status: "loading" },
 			generation: 0,
+			showArchived: false,
 			reload,
 			async upsert(note: NoteInput): Promise<Note> {
 				const saved = await repo.upsertNote(note);
@@ -101,6 +118,11 @@ export function createNotesStore(repo: Repo): {
 			},
 			async archive(id: string): Promise<void> {
 				await repo.archiveNote(id);
+			},
+			setShowArchived(show: boolean): void {
+				if (get().showArchived === show) return;
+				set({ showArchived: show });
+				void reload();
 			},
 		};
 	});

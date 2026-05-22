@@ -44,7 +44,10 @@ export function ensureWasm(): Promise<void> {
 			ready = true;
 		});
 	}
-	return initPromise;
+	// initPromise is guaranteed non-null here: either it was already
+	// set before the guard, or the block above just assigned it.
+	// biome-ignore lint/style/noNonNullAssertion: see comment above
+	return initPromise!;
 }
 
 /**
