@@ -496,6 +496,23 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 	let currentLeaderId: string | null = null;
 	let closed = false;
 	/**
+	 * Round 5: terminal failure state. Set when the restart budget is
+	 * exhausted in `restartLockRequest`. Once `failed`, the transport
+	 * refuses to enqueue new RPCs (synthesizes an error envelope per
+	 * call so `WorkerClient` rejects rather than hanging) and the
+	 * per-pair / discovery BCs are already torn down. Distinct from
+	 * `closed` because `close()` is a deliberate caller-initiated
+	 * teardown while `failed` is a fatal transport-level give-up — the
+	 * `error` event has already fired by the time this flips.
+	 *
+	 * Follow-up to consider: `createRepo` doesn't currently re-create
+	 * the `Repo` on a transport `error` event, so the page would need
+	 * to drop and rebuild the `Repo` to actually degrade to the plain
+	 * dedicated-worker tier. The `failed` state at least ensures
+	 * pending and future RPCs fail loudly instead of stranding.
+	 */
+	let failed = false;
+	/**
 	 * Set once we've issued a pair-request for the *current* leader id
 	 * and are waiting for the matching `pair-ack`. Cleared on ack so
 	 * subsequent leader changes can re-arm the handshake. Drives the
@@ -1062,12 +1079,74 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 		}
 		failureTimestamps.push(now);
 		if (failureTimestamps.length >= MAX_FAILURES) {
-			// Budget exhausted: this crash makes the Nth in-window
-			// failure. Stop restarting and tell the world. We don't
-			// `failReady` here because `whenReady` is already settled
-			// (the transport ran successfully at least once before
-			// crashing); the contract for ongoing failures is the
-			// `error` event.
+			// Round 5: budget exhausted — enter terminal `failed` state.
+			// `handleWriterFailure` already dropped leadership and the
+			// per-pair bridges, but the page-side `pairChannel` and the
+			// discovery BC are still wired up. Without finishing the
+			// teardown here, subsequent `postMessage` calls would queue
+			// envelopes into `inFlight` and post them onto an orphaned
+			// pair BC (no leader on the other end), and pending RPCs
+			// that were buffered *before* the final crash would sit in
+			// `inFlight` forever. We:
+			//   1. Reject every still-pending RPC across all bridges
+			//      with a clear error so `WorkerClient` surfaces a real
+			//      failure to its callers (`bootstrap`, `upsertNote`,
+			//      etc.).
+			//   2. Close per-pair + discovery BCs so no further messages
+			//      are exchanged.
+			//   3. Flip `failed = true` — future `postMessage` calls
+			//      synthesize an error envelope locally and never touch
+			//      the wire (the `WorkerLike` contract is best-effort,
+			//      but a failed transport should refuse rather than
+			//      silently enqueue).
+			//   4. Emit the final `error` event (existing behaviour).
+			failed = true;
+			const failMessage = `storage worker permanently failed (${MAX_FAILURES} crashes in ${RESTART_WINDOW_MS / 1000}s)`;
+			// Step 1: fail every pending in-flight RPC by synthesizing
+			// per-id error envelopes into the page-side listeners. The
+			// pair bridges were already disposed by `handleWriterFailure`
+			// → `giveUpLeadership`, so we feed the envelopes directly
+			// into the same path `onPairMessage` would have taken (which
+			// also drops the entry from `inFlight`).
+			const pendingIds = Array.from(inFlight.keys());
+			for (const id of pendingIds) {
+				const envelope = {
+					kind: "error" as const,
+					id,
+					message: failMessage,
+				};
+				inFlight.delete(id);
+				const event = { data: envelope } as MessageEvent;
+				for (const l of messageListeners) {
+					try {
+						l(event);
+					} catch {
+						// best-effort: a listener throwing must not block
+						// the rest of the teardown
+					}
+				}
+			}
+			// Step 2: drop the page-side pair channel + discovery
+			// subscription so we stop responding to or initiating any
+			// future leadership messages.
+			detachPair();
+			currentLeaderId = null;
+			clearPendingPair();
+			try {
+				discovery.removeEventListener("message", onDiscoveryMessage);
+			} catch {
+				// best-effort
+			}
+			try {
+				discovery.close();
+			} catch {
+				// best-effort: discovery may already be detached if a
+				// concurrent `close()` ran
+			}
+			// Step 4: emit the terminal `error` event so `WorkerClient
+			// .#onError` fires and any code path watching the event
+			// channel (rather than per-request rejections) sees the
+			// give-up signal.
 			const event = new Event("error");
 			for (const l of errorListeners) l(event);
 			return;
@@ -1096,6 +1175,38 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 		postMessage: (data) => {
 			if (closed) return;
 			const id = envelopeId(data);
+			// Round 5: terminal `failed` state. The transport has given
+			// up after the restart budget was exhausted; rather than
+			// silently enqueueing this envelope into `inFlight` (where
+			// it would never resolve), synthesize an error envelope
+			// locally so the caller's `WorkerClient` rejects the
+			// underlying request promise promptly. We deliberately do
+			// NOT enter `inFlight` here — there's no transport left to
+			// replay on.
+			if (failed) {
+				if (id === null) return;
+				const envelope = {
+					kind: "error" as const,
+					id,
+					message: `storage worker permanently failed (${MAX_FAILURES} crashes in ${RESTART_WINDOW_MS / 1000}s)`,
+				};
+				const event = { data: envelope } as MessageEvent;
+				// Dispatch on a microtask so the caller's `.postMessage`
+				// returns before the listener's reject fires — matches
+				// the asynchrony a real worker `error` envelope would
+				// have, and avoids re-entrant surprises if the caller
+				// adds listeners immediately after posting.
+				queueMicrotask(() => {
+					for (const l of messageListeners) {
+						try {
+							l(event);
+						} catch {
+							// best-effort
+						}
+					}
+				});
+				return;
+			}
 			if (id !== null) {
 				inFlight.set(id, { data });
 			}

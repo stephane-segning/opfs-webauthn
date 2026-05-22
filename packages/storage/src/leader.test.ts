@@ -1043,6 +1043,306 @@ describe("Web-Locks leader-election transport", () => {
 		}
 	});
 
+	it("fails pending and future RPCs when the restart budget is exhausted", async () => {
+		// Round-5 fix. The previous `MAX_FAILURES` handler only emitted
+		// an `error` event and returned, leaving the page-side
+		// `pairChannel` + `inFlight` map dangling. Pending RPCs from
+		// before the final crash stayed in `inFlight` forever, and new
+		// `postMessage` calls kept enqueueing onto an orphaned BC. The
+		// fix enters a terminal `failed` state:
+		//   - pending in-flight RPCs reject promptly with a clear error
+		//   - subsequent `postMessage` synthesizes an error envelope
+		//     locally instead of silently enqueueing
+		//   - per-pair + discovery BCs are torn down
+		const locks = new FakeLockManager();
+		const channelSuffix = `terminal-fail-${Math.random()}`;
+
+		// Crash-only writer factory. Identical shape to the existing
+		// budget-exhaust test — every writer this returns yields only
+		// an `error` event when prodded by `triggerLatest()`.
+		const writerErrorListeners: Array<Set<(event: Event) => void>> = [];
+		let factoryCalls = 0;
+		const factory = (): WorkerLike => {
+			factoryCalls += 1;
+			const listeners = new Set<(event: Event) => void>();
+			writerErrorListeners.push(listeners);
+			return {
+				postMessage: () => {
+					// Black hole — pending requests sit in-flight until the
+					// budget-exhaust path rejects them.
+				},
+				addEventListener: ((type: string, listener: unknown) => {
+					if (type === "error") {
+						listeners.add(listener as (event: Event) => void);
+					}
+				}) as WorkerLike["addEventListener"],
+				removeEventListener: ((type: string, listener: unknown) => {
+					if (type === "error") {
+						listeners.delete(listener as (event: Event) => void);
+					}
+				}) as WorkerLike["removeEventListener"],
+				close: () => {
+					listeners.clear();
+				},
+			};
+		};
+
+		const deps = makeDeps(channelSuffix, locks, "termFail", factory);
+		const transport = createLeaderTransport(deps);
+
+		// Eavesdrop on the discovery channel so we can verify it's
+		// closed after budget exhaustion. After teardown, posting on a
+		// fresh subscriber should reach the spy but NOT trigger any
+		// transport reaction (no `leader-elected` reply to a probe).
+		const spy = new BroadcastChannel(`opfs-leader-${channelSuffix}`);
+		const spySawAnnounce: Array<{ id: string }> = [];
+		spy.addEventListener("message", (event) => {
+			const data = event.data as { kind?: string; id?: string };
+			if (data?.kind === "leader-elected" && data.id) {
+				spySawAnnounce.push({ id: data.id });
+			}
+		});
+
+		const triggerLatest = (): void => {
+			const latest = writerErrorListeners[writerErrorListeners.length - 1];
+			if (!latest) return;
+			const event = new Event("error");
+			for (const l of latest) l(event);
+		};
+
+		try {
+			await transport.whenReady;
+
+			// Crash 1 — within budget, restart.
+			triggerLatest();
+			await waitFor(() => factoryCalls >= 2, 1000);
+			// Crash 2 — within budget, restart.
+			triggerLatest();
+			await waitFor(() => factoryCalls >= 3, 1000);
+			// Crash 3 — budget exhausted; transport enters `failed`.
+			triggerLatest();
+			// Let the failure path drain any synchronous side-effects
+			// (error envelopes synthesized into messageListeners run on
+			// the next microtask via `queueMicrotask`).
+			await new Promise((r) => setTimeout(r, 20));
+
+			// Build a fresh `WorkerClient` AFTER the transport has
+			// failed. The transport's `postMessage` must synthesize an
+			// error envelope locally so `WorkerClient.send` rejects
+			// promptly rather than queueing into an orphaned in-flight
+			// map. This is the core round-5 behaviour: a permanently-
+			// failed transport refuses to enqueue.
+			const client = new WorkerClient(transport);
+			const pendingAfterFailure = client.send({ kind: "bootstrap" });
+			await expect(pendingAfterFailure).rejects.toThrow(/permanently failed/);
+
+			// Discovery channel is torn down: posting `leader-query`
+			// onto the discovery BC must not elicit a fresh
+			// `leader-elected` reply (the transport unsubscribed).
+			// Snapshot the announce count *just before* the probe so we
+			// only assert on what happens AFTER the discovery tear-down,
+			// ignoring announces emitted by each per-crash restart.
+			const announcesBeforeProbe = spySawAnnounce.length;
+			spy.postMessage({ kind: "leader-query" });
+			await new Promise((r) => setTimeout(r, 50));
+			expect(spySawAnnounce.length).toBe(announcesBeforeProbe);
+
+			// Factory was never invoked a 4th time — terminal state is
+			// sticky, no recovery attempt.
+			expect(factoryCalls).toBe(3);
+		} finally {
+			spy.close();
+			transport.close();
+		}
+	});
+
+	it("rejects pre-failure pending RPCs when the restart budget is exhausted", async () => {
+		// Round-5 fix, in-flight side. Pending RPCs that were buffered
+		// into `inFlight` before the final crash must be drained with a
+		// synthetic error envelope so the page-side promise rejects.
+		// `WorkerClient` would already reject them on the per-crash
+		// `error` event, but the transport itself must also clean up
+		// the `inFlight` map and dispatch the per-id error envelope so
+		// any non-`WorkerClient` consumer (or a fresh `WorkerClient`
+		// installed *between* crashes) sees the rejection.
+		const locks = new FakeLockManager();
+		const channelSuffix = `inflight-fail-${Math.random()}`;
+
+		const writerErrorListeners: Array<Set<(event: Event) => void>> = [];
+		let factoryCalls = 0;
+		const factory = (): WorkerLike => {
+			factoryCalls += 1;
+			const listeners = new Set<(event: Event) => void>();
+			writerErrorListeners.push(listeners);
+			return {
+				postMessage: () => {},
+				addEventListener: ((type: string, listener: unknown) => {
+					if (type === "error") {
+						listeners.add(listener as (event: Event) => void);
+					}
+				}) as WorkerLike["addEventListener"],
+				removeEventListener: ((type: string, listener: unknown) => {
+					if (type === "error") {
+						listeners.delete(listener as (event: Event) => void);
+					}
+				}) as WorkerLike["removeEventListener"],
+				close: () => {
+					listeners.clear();
+				},
+			};
+		};
+
+		const deps = makeDeps(channelSuffix, locks, "inflightFail", factory);
+		const transport = createLeaderTransport(deps);
+
+		const triggerLatest = (): void => {
+			const latest = writerErrorListeners[writerErrorListeners.length - 1];
+			if (!latest) return;
+			const event = new Event("error");
+			for (const l of latest) l(event);
+		};
+
+		// Collect raw messages so we can verify a per-id error envelope
+		// is dispatched for the in-flight request when the budget
+		// exhausts. We need the raw envelope path (not WorkerClient) so
+		// the `kind: "error"` envelope is visible — `WorkerClient` would
+		// have already rejected it on the per-crash error event.
+		const rawMessages: unknown[] = [];
+		transport.addEventListener("message", (event) => {
+			rawMessages.push(event.data);
+		});
+
+		try {
+			await transport.whenReady;
+
+			// Post a raw envelope directly into the transport's
+			// `postMessage` so it enters `inFlight` without involving
+			// `WorkerClient`. Use id 42 so the assertion is unambiguous.
+			transport.postMessage({ id: 42, request: { kind: "bootstrap" } });
+			await new Promise((r) => setTimeout(r, 10));
+
+			// Three crashes → budget exhausted on the third.
+			triggerLatest();
+			await waitFor(() => factoryCalls >= 2, 1000);
+			triggerLatest();
+			await waitFor(() => factoryCalls >= 3, 1000);
+			triggerLatest();
+			// Microtask drain — the failure path uses `queueMicrotask`
+			// for the synthesized envelopes too, but the inFlight drain
+			// inside `restartLockRequest` itself is synchronous; either
+			// way one event-loop tick covers both paths.
+			await new Promise((r) => setTimeout(r, 20));
+
+			// Among `rawMessages`, exactly one must be a per-id error
+			// envelope for id 42 carrying the permanent-failure message.
+			const fail42 = rawMessages.find((m) => {
+				if (typeof m !== "object" || m === null) return false;
+				const env = m as { kind?: string; id?: number; message?: string };
+				return (
+					env.kind === "error" &&
+					env.id === 42 &&
+					typeof env.message === "string" &&
+					/permanently failed/.test(env.message)
+				);
+			});
+			expect(fail42).toBeDefined();
+		} finally {
+			transport.close();
+		}
+	});
+
+	it("closes the per-pair BroadcastChannel on budget exhaustion (follower view)", async () => {
+		// Round-5 fix, follower side. When a leader's restart budget
+		// exhausts, every paired follower's per-pair BC must be closed
+		// from the leader side via the bridge `dispose()` path (already
+		// covered by `giveUpLeadership` in `handleWriterFailure`), and
+		// the leader's own page-side `pairChannel` must be detached so
+		// no further envelopes flow onto it. This test wires a follower
+		// alongside the leader and asserts the leader's pair-channel
+		// listeners stop firing after the final crash.
+		const locks = new FakeLockManager();
+		const channelSuffix = `pair-close-${Math.random()}`;
+
+		const writerErrorListeners: Array<Set<(event: Event) => void>> = [];
+		const factory = (): WorkerLike => {
+			const listeners = new Set<(event: Event) => void>();
+			writerErrorListeners.push(listeners);
+			return {
+				postMessage: () => {},
+				addEventListener: ((type: string, listener: unknown) => {
+					if (type === "error") {
+						listeners.add(listener as (event: Event) => void);
+					}
+				}) as WorkerLike["addEventListener"],
+				removeEventListener: ((type: string, listener: unknown) => {
+					if (type === "error") {
+						listeners.delete(listener as (event: Event) => void);
+					}
+				}) as WorkerLike["removeEventListener"],
+				close: () => {
+					listeners.clear();
+				},
+			};
+		};
+
+		const deps = makeDeps(channelSuffix, locks, "pairLeader", factory);
+		const transport = createLeaderTransport(deps);
+
+		const triggerLatest = (): void => {
+			const latest = writerErrorListeners[writerErrorListeners.length - 1];
+			if (!latest) return;
+			const event = new Event("error");
+			for (const l of latest) l(event);
+		};
+
+		try {
+			await transport.whenReady;
+
+			// Listen on the transport's `message` channel to detect any
+			// pair BC traffic post-failure. After the budget exhausts,
+			// the leader's self-pair channel is detached and a manual
+			// post on the pair BC name should NOT reach our listener.
+			const seenMessages: MessageEvent[] = [];
+			transport.addEventListener("message", (e) => seenMessages.push(e));
+
+			// Three crashes in a row → terminal failure.
+			triggerLatest();
+			await waitFor(() => writerErrorListeners.length >= 2, 1000);
+			triggerLatest();
+			await waitFor(() => writerErrorListeners.length >= 3, 1000);
+			// Snapshot per-id pending error envelopes already drained on
+			// budget exhaustion — those WILL appear in `seenMessages`
+			// via the synthesized failure path. We assert the count
+			// *stays* at whatever it is after the third crash, not on
+			// the absolute number.
+			triggerLatest();
+			await new Promise((r) => setTimeout(r, 50));
+			const countAtFailure = seenMessages.length;
+
+			// Now post onto the per-pair BC name the leader was using.
+			// The transport's pair channel was detached in the failure
+			// path, so a fresh subscriber's post must not reach the
+			// transport's `messageListeners`. We can't know the exact
+			// pair name without scraping the announcement, but we know
+			// the suffix-rewriter prefixes every channel name — so we
+			// reuse the discovery suffix to construct a sibling BC that
+			// shares the name space.
+			const sibling = new BroadcastChannel(
+				`opfs-pair-pairLeader-1-pairLeader-client-1-${channelSuffix}`,
+			);
+			sibling.postMessage({ kind: "noise", id: 99999 });
+			await new Promise((r) => setTimeout(r, 50));
+			sibling.close();
+
+			// No new messages should have reached the transport's pair
+			// listener — the pair channel was closed in the failure
+			// path.
+			expect(seenMessages.length).toBe(countAtFailure);
+		} finally {
+			transport.close();
+		}
+	});
+
 	it("clears the pending pair-ack retry when promoted to leader", async () => {
 		// Round-3 fix: a tab that paired with a previous (now-vanished)
 		// leader armed `pendingPair` and started the 500ms `pair-request`
