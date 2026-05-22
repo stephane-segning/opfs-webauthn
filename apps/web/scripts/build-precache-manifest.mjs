@@ -26,16 +26,20 @@
  *
  * Versioning:
  *   - `version` is a short SHA-256 of (concatenated URL list +
- *     each file's size). A code change ⇒ a hashed-filename change
- *     ⇒ a new version. The service worker keys its CacheStorage
- *     by this version, so old caches get evicted on activate.
+ *     each file's bytes). Hashing the actual contents — not just
+ *     the size — catches deploys that swap a non-hashed asset
+ *     (notably `index.html` or `config.js`) for one of identical
+ *     byte length; otherwise the cache key wouldn't change and
+ *     stale bytes would survive forever. The service worker keys
+ *     its CacheStorage by this version, so old caches get evicted
+ *     on activate.
  *
  * Importable via `import { buildManifest } from '...'` so the
  * vitest test can drive it without spawning a subprocess.
  */
 
 import { createHash } from "node:crypto";
-import { readdir, stat, writeFile } from "node:fs/promises";
+import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, posix, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -87,10 +91,10 @@ export async function buildManifest(outDir) {
 	const urls = files.map((f) => `./${f}`);
 	const hash = createHash("sha256");
 	for (const f of files) {
-		const s = await stat(join(outDir, f));
+		const content = await readFile(join(outDir, f));
 		hash.update(f);
 		hash.update("\0");
-		hash.update(String(s.size));
+		hash.update(content);
 		hash.update("\0");
 	}
 	const version = hash.digest("hex").slice(0, 16);

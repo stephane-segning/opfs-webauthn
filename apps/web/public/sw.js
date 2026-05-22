@@ -59,7 +59,21 @@
  *   safe — and gets users their fix without a tab reload.
  */
 
-importScripts("./sw-manifest.js");
+// `sw-manifest.js` is emitted by `scripts/build-precache-manifest.mjs`,
+// which only runs when Next produces a static export (`out/`). For a
+// regular `next build` (no `NEXT_OUTPUT_EXPORT=1`) the file is absent
+// and `importScripts` would throw, aborting SW evaluation entirely —
+// meaning even the no-op fetch handler below would never be installed.
+// Swallow the failure so the worker still evaluates; without a
+// manifest we fall back to a `dev` cache key and an empty precache
+// list, which makes `install` a no-op and every `fetch` go straight
+// to the network. That degrades gracefully into "no offline shell"
+// rather than "SW silently broken".
+try {
+	importScripts("./sw-manifest.js");
+} catch (_noManifest) {
+	// Intentionally empty — see comment above.
+}
 
 const PRECACHE = self.__OPFS_PRECACHE ?? { version: "dev", urls: [] };
 const CACHE_PREFIX = "opfs-shell-";
@@ -119,8 +133,17 @@ async function navigationStrategy(request) {
 	const cache = await caches.open(CACHE_NAME);
 	try {
 		const response = await fetch(request);
-		// Don't write navigations into the cache: each route URL
-		// would balloon the cache with copies of the same shell.
+		// A 5xx from the origin is functionally equivalent to "offline"
+		// from the user's perspective: the network reached the server
+		// but the server can't serve the shell. Prefer the cached
+		// shell so the SPA still boots and routing/state work, rather
+		// than handing the user the origin's error page. A 404 still
+		// passes through (it likely means the user typed an unknown
+		// path on a domain we don't control, and shadowing it with
+		// our shell would be misleading).
+		if (response.ok || response.status === 404) return response;
+		const shell = await cache.match(SHELL_URL);
+		if (shell) return shell;
 		return response;
 	} catch (_offline) {
 		const shell = await cache.match(SHELL_URL);

@@ -112,6 +112,21 @@ describe("buildManifest", () => {
 		expect(before.version).not.toBe(after.version);
 	});
 
+	it("changes the version when contents differ but sizes match", async () => {
+		// Guards against a regression where the version hash was
+		// derived from `stat.size` only: a deploy that swaps a
+		// non-hashed asset (`index.html`, `config.js`) for one of
+		// identical byte length would have kept the same cache key
+		// and served stale bytes forever.
+		const shellPath = join(outDir, "index.html");
+		await writeFile(shellPath, "AAAAAAAAAA");
+		const before = await buildManifest(outDir);
+		await writeFile(shellPath, "BBBBBBBBBB");
+		const after = await buildManifest(outDir);
+		expect(after.urls).toEqual(before.urls);
+		expect(after.version).not.toBe(before.version);
+	});
+
 	it("produces a 16-char hex version stamp", async () => {
 		const manifest = await buildManifest(outDir);
 		expect(manifest.version).toMatch(/^[0-9a-f]{16}$/);
