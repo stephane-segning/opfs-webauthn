@@ -348,6 +348,12 @@ body {
 	gap: var(--space-3);
 }
 
+.note-editor-bar-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+}
+
 .note-editor-title,
 .note-editor-body {
 	width: 100%;
@@ -386,11 +392,11 @@ body {
 /*
  * The preview surface mirrors the textarea's affordance — same min-height,
  * same padding, same border — so flipping between modes doesn't shift the
- * surrounding layout. It is a `<button>` for accessibility (keyboard focus,
- * activation by Enter/Space) but visually a passive panel.
+ * surrounding layout. It is a plain container: entering edit mode is
+ * driven by an explicit toolbar button so links inside the preview can
+ * navigate without a parent click target stealing the event.
  */
 .note-editor-preview {
-	appearance: none;
 	width: 100%;
 	min-height: 50vh;
 	background: var(--surface-card);
@@ -399,19 +405,6 @@ body {
 	padding: var(--space-3) var(--space-4);
 	font: inherit;
 	color: var(--text-primary);
-	text-align: left;
-	cursor: text;
-	transition: border-color var(--motion-medium);
-}
-
-.note-editor-preview:hover {
-	border-color: var(--border-strong);
-}
-
-.note-editor-preview:focus-visible {
-	outline: none;
-	border-color: var(--accent);
-	box-shadow: var(--focus-ring);
 }
 
 .note-editor-preview-empty {

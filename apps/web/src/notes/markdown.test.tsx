@@ -85,6 +85,80 @@ describe("NoteMarkdown", () => {
 		}
 	});
 
+	it("treats protocol-relative URLs as external", () => {
+		// `//example.com/foo` inherits the page protocol but points to a
+		// different host than any realistic same-origin location. The
+		// safer default — and the one the security review on PR #48
+		// asked for — is to open in a new tab with the noopener rel.
+		const original = globalThis.window;
+		(
+			globalThis as { window?: { location: { href: string; origin: string } } }
+		).window = {
+			location: {
+				href: "https://app.example/",
+				origin: "https://app.example",
+			},
+		};
+		try {
+			const out = render("[ext](//example.com/foo)");
+			expect(out).toContain('target="_blank"');
+			expect(out).toContain('rel="noopener noreferrer"');
+		} finally {
+			(globalThis as { window?: unknown }).window = original;
+		}
+	});
+
+	it("renders identically on the server for absolute same-origin URLs", () => {
+		// SSR/CSR hydration guard. Without `window`, the link override
+		// returns `external = false`. The very first client paint also
+		// returns `false` for same-origin absolute URLs, so the two HTML
+		// strings must match — no hydration warning, no torn DOM.
+		const original = globalThis.window;
+		try {
+			// Server: no window.
+			(globalThis as { window?: unknown }).window = undefined;
+			const ssr = renderToStaticMarkup(
+				<NoteMarkdown source="[home](https://app.example/notes)" />,
+			);
+
+			// Client: window with a same-origin location.
+			(
+				globalThis as {
+					window?: { location: { href: string; origin: string } };
+				}
+			).window = {
+				location: {
+					href: "https://app.example/",
+					origin: "https://app.example",
+				},
+			};
+			const csr = renderToStaticMarkup(
+				<NoteMarkdown source="[home](https://app.example/notes)" />,
+			);
+
+			expect(ssr).toBe(csr);
+			expect(ssr).not.toContain('target="_blank"');
+		} finally {
+			(globalThis as { window?: unknown }).window = original;
+		}
+	});
+
+	it("does not emit target=_blank during SSR (deterministic default)", () => {
+		const original = globalThis.window;
+		try {
+			(globalThis as { window?: unknown }).window = undefined;
+			const out = renderToStaticMarkup(
+				<NoteMarkdown source="[ext](https://anthropic.com)" />,
+			);
+			// Even though the URL *is* cross-origin, SSR returns the safe,
+			// origin-agnostic default. The client effect (or just the
+			// next client render in the React reconciliation) flips it.
+			expect(out).not.toContain('target="_blank"');
+		} finally {
+			(globalThis as { window?: unknown }).window = original;
+		}
+	});
+
 	it("does not run <script> in the source — the tag is dropped", () => {
 		const out = render("hello <script>alert(1)</script> world");
 		// The sanitizer strips the script element entirely. The text

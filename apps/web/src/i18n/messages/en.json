@@ -69,11 +69,12 @@
 			"region": "Note editor",
 			"cancel": "Cancel",
 			"save": "Save",
+			"edit": "Edit",
+			"preview": "Preview",
 			"archive": "Archive",
 			"share": "Share to another device",
 			"titleLabel": "Title",
 			"bodyLabel": "Body",
-			"editBody": "Edit body",
 			"titlePlaceholder": "Title",
 			"bodyPlaceholder": "Write something only you can read."
 		}

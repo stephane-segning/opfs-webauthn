@@ -54,8 +54,22 @@ const SANITIZE_SCHEMA = defaultSchema;
 
 /**
  * A href is "external" if it parses as an absolute URL with a different
- * origin than the document. Anchors (`#foo`) and relative paths render
- * in-place; only http(s) cross-origin links get the new-tab treatment.
+ * origin than the document. Anchors (`#foo`) and same-origin relative
+ * paths render in-place; only http(s) cross-origin links get the
+ * new-tab treatment.
+ *
+ * SSR safety: on the server we cannot know the document origin, so we
+ * cannot decide externality without risking a hydration mismatch on
+ * absolute same-origin URLs (e.g. the user pasted the full URL of a
+ * page in this app). We default to `false` on the server and let the
+ * client paint compute the correct value after mount. The first paint
+ * is therefore "same-tab" for every absolute URL, which is a milder
+ * surprise than React tearing the link element down because the server
+ * said `target="_blank"` and the client disagrees.
+ *
+ * Protocol-relative URLs (`//example.com/foo`) are treated as external:
+ * same-origin protocol-relative is uncommon and the safer default is to
+ * open in a new tab with `rel="noopener noreferrer"`.
  *
  * We swallow URL parse errors and treat the link as internal — the
  * sanitizer has already rejected any URL it considers unsafe, so a
@@ -64,14 +78,20 @@ const SANITIZE_SCHEMA = defaultSchema;
  */
 function isExternalHref(href: string | undefined): boolean {
 	if (!href) return false;
-	if (href.startsWith("#") || href.startsWith("/")) return false;
+	// SSR: stay deterministic. The client effect will upgrade the link
+	// after hydration. Returning `false` here matches the very first
+	// client paint, before window.location is read.
+	if (typeof window === "undefined") return false;
+	if (href.startsWith("#")) return false;
+	// Protocol-relative (`//host/path`) — treat as external. Without an
+	// explicit scheme they inherit the page's, but the host is different
+	// from the document origin in every realistic case.
+	if (href.startsWith("//")) return true;
+	// Path-relative (`/foo`, `./foo`, `foo`) is by definition same-origin.
+	if (href.startsWith("/")) return false;
 	try {
-		const url = new URL(
-			href,
-			typeof window !== "undefined" ? window.location.href : "https://x/",
-		);
+		const url = new URL(href, window.location.href);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-		if (typeof window === "undefined") return true;
 		return url.origin !== window.location.origin;
 	} catch {
 		return false;
