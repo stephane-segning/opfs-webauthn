@@ -34,6 +34,13 @@ export type NotesStoreSnapshot = {
 	readonly upsert: (note: NoteInput) => Promise<Note>;
 	readonly archive: (id: string) => Promise<void>;
 	/**
+	 * Hard-delete the note. Irreversible — the row is removed entirely.
+	 * The repo's `tx-applied` broadcast triggers a reload that drops
+	 * the id from the cached list. Mirrors `archive` so the UI can
+	 * call either action through the same store surface.
+	 */
+	readonly delete: (id: string) => Promise<void>;
+	/**
 	 * Toggle the archived-visibility flag. Immediately triggers a
 	 * reload so the new state is consistent with what's on disk.
 	 */
@@ -118,6 +125,14 @@ export function createNotesStore(repo: Repo): {
 			},
 			async archive(id: string): Promise<void> {
 				await repo.archiveNote(id);
+			},
+			async delete(id: string): Promise<void> {
+				// Hard delete. The dispatcher broadcasts `tx-applied`
+				// with the id and the resulting reload removes the row
+				// from `state.notes`. No optimistic splice — staying
+				// consistent with `upsert`/`archive` keeps a single
+				// source of truth.
+				await repo.deleteNote(id);
 			},
 			setShowArchived(show: boolean): void {
 				if (get().showArchived === show) return;

@@ -1,9 +1,15 @@
+/**
+ * Vitest config for the web app. We override the project's
+ * `jsx: "preserve"` (which is for Next's compiler) so that esbuild
+ * lowers JSX with the automatic runtime during test runs — otherwise
+ * any `.tsx` test file or imported React component crashes with
+ * `React is not defined`. Pinning `jsx: "automatic"` here aligns the
+ * test runtime with the app runtime (Next 15 + React 19 use the
+ * automatic runtime everywhere).
+ */
+
 import { defineConfig } from "vitest/config";
 
-// The default vitest esbuild config uses classic JSX (`React.createElement`),
-// which fails for TSX test files in this codebase — we run React 19 with the
-// automatic runtime everywhere else (next.js is configured that way). Pinning
-// `jsx: "automatic"` here aligns the test runtime with the app runtime.
 export default defineConfig({
 	esbuild: {
 		jsx: "automatic",

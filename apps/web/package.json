@@ -4,7 +4,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "next build",
+		"build": "next build && node ./scripts/build-precache-manifest.mjs",
 		"check": "biome check .",
 		"check:write": "biome check --write .",
 		"dev": "next dev --turbo",

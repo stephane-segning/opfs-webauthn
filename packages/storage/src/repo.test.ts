@@ -154,6 +154,38 @@ describe("Repo end-to-end through WorkerClient + sqlite-wasm", () => {
 		}
 	});
 
+	it("deleteNote removes the row so getNote / listNotes no longer find it", async () => {
+		const db = await openInMemoryDatabase();
+		try {
+			const repo = attachStack(db, makeVault());
+			await repo.bootstrap();
+			const a = await repo.upsertNote({ title: "doomed", body: "x" });
+			const b = await repo.upsertNote({ title: "spared", body: "y" });
+
+			await repo.deleteNote(a.id);
+
+			expect(await repo.getNote(a.id)).toBeNull();
+			const page = await repo.listNotes();
+			expect(page.notes.map((n) => n.id)).toEqual([b.id]);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("deleteNote against an unknown id resolves without error", async () => {
+		const db = await openInMemoryDatabase();
+		try {
+			const repo = attachStack(db, makeVault());
+			await repo.bootstrap();
+			// Mirror the cross-tab race: id never inserted, delete is a no-op.
+			await expect(
+				repo.deleteNote("00000000000000000000000000"),
+			).resolves.toBeUndefined();
+		} finally {
+			db.close();
+		}
+	});
+
 	it("getNote returns null for an unknown id", async () => {
 		const db = await openInMemoryDatabase();
 		try {

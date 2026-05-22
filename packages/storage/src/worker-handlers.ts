@@ -90,6 +90,15 @@ export function createDispatcher(opts: DispatcherOptions): Dispatcher {
 				broadcastTx([req.id]);
 				return { kind: "archiveNote" };
 			}),
+		deleteNote: (req) =>
+			withDb((r) => {
+				// Hard delete is irreversible — the UI gates this behind a
+				// confirmation dialog (see `note-editor.tsx`). The id still
+				// fans out so other tabs drop the row from their cached list.
+				r.delete(req.id);
+				broadcastTx([req.id]);
+				return { kind: "deleteNote" };
+			}),
 		close: async () => {
 			// Per-tab `close` only detaches one Connection (see
 			// `connection.ts`). The DB stays open so other tabs (under

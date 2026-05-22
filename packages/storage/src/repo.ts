@@ -111,6 +111,20 @@ export class Repo {
 		await this.#client.send({ kind: "archiveNote", id });
 	}
 
+	/**
+	 * Hard-delete a note. Irreversible — there is no undo. The UI is
+	 * responsible for the confirmation step; this method just forwards
+	 * to the worker, which removes the row and fans out `tx-applied`
+	 * so every tab drops the id from its cached list on reload.
+	 *
+	 * A delete against a non-existent id (e.g. another tab deleted it
+	 * first) is treated as success — the row is gone either way, which
+	 * matches the user-facing semantics.
+	 */
+	async deleteNote(id: string): Promise<void> {
+		await this.#client.send({ kind: "deleteNote", id });
+	}
+
 	async close(): Promise<void> {
 		try {
 			await this.#client.send({ kind: "close" });

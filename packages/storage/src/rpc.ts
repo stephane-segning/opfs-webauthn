@@ -26,6 +26,7 @@ export type WorkerRequest =
 	| { readonly kind: "upsertNote"; readonly row: NoteRowInput }
 	| { readonly kind: "getNote"; readonly id: string }
 	| { readonly kind: "archiveNote"; readonly id: string }
+	| { readonly kind: "deleteNote"; readonly id: string }
 	| { readonly kind: "close" };
 
 /** Wire messages from the worker to the page (responses only). */
@@ -40,6 +41,7 @@ export type WorkerResponse =
 	| { readonly kind: "upsertNote"; readonly row: EncryptedNoteRow }
 	| { readonly kind: "getNote"; readonly row: EncryptedNoteRow | null }
 	| { readonly kind: "archiveNote" }
+	| { readonly kind: "deleteNote" }
 	| { readonly kind: "close" };
 
 /**

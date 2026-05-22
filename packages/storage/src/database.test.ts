@@ -235,4 +235,35 @@ describe("NoteRepositorySql against real SQLite", () => {
 			db.close();
 		}
 	});
+
+	it("delete removes the row entirely (irreversible)", async () => {
+		const db = await freshDb();
+		try {
+			const repo = new NoteRepositorySql(db);
+			const r = row();
+			repo.upsert(r);
+			expect(repo.get(r.id)).not.toBeNull();
+			repo.delete(r.id);
+			expect(repo.get(r.id)).toBeNull();
+			// Sibling rows survive — the bind is per-id, not a wildcard.
+			const sibling = row();
+			repo.upsert(sibling);
+			repo.delete(r.id);
+			expect(repo.get(sibling.id)).not.toBeNull();
+		} finally {
+			db.close();
+		}
+	});
+
+	it("delete on an unknown id is a silent no-op", async () => {
+		// Two tabs racing the same delete must not crash the second one;
+		// SQLite's DELETE returns 0 affected rows without raising.
+		const db = await freshDb();
+		try {
+			const repo = new NoteRepositorySql(db);
+			expect(() => repo.delete(generateRowId())).not.toThrow();
+		} finally {
+			db.close();
+		}
+	});
 });

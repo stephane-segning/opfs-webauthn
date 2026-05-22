@@ -57,6 +57,11 @@ class FakeRepo {
 		queueMicrotask(() => this.#fire([id]));
 	}
 
+	async deleteNote(id: string): Promise<void> {
+		this.#notes = this.#notes.filter((n) => n.id !== id);
+		queueMicrotask(() => this.#fire([id]));
+	}
+
 	subscribeTxApplied(listener: (ids: readonly string[]) => void): () => void {
 		this.#listeners.add(listener);
 		return () => {
@@ -170,6 +175,43 @@ describe("createNotesStore", () => {
 		await settle();
 		await store.getState().archive("id-1");
 		await settle();
+		const ready = store.getState().state;
+		expect(ready.status).toBe("ready");
+		if (ready.status === "ready") expect(ready.notes).toHaveLength(0);
+		unsubscribe();
+	});
+
+	it("delete removes the note from the list even when archived is visible", async () => {
+		// Hard delete differs from archive: even with showArchived=true
+		// the row is gone, because the underlying repo dropped it.
+		await fake.upsertNote({ title: "doomed", body: "" });
+		await fake.upsertNote({ title: "kept", body: "" });
+		const { store, unsubscribe } = createNotesStore(asRepo(fake));
+		await settle();
+		store.getState().setShowArchived(true);
+		await settle();
+
+		await store.getState().delete("id-1");
+		await settle();
+
+		const ready = store.getState().state;
+		expect(ready.status).toBe("ready");
+		if (ready.status === "ready") {
+			expect(ready.notes.map((n) => n.title)).toEqual(["kept"]);
+		}
+		unsubscribe();
+	});
+
+	it("delete tx-applied reload drops the id from the cached list", async () => {
+		// Mirrors the archive flow: the delete action does not splice
+		// optimistically, it relies on the broadcast-driven reload.
+		await fake.upsertNote({ title: "doomed", body: "" });
+		const { store, unsubscribe } = createNotesStore(asRepo(fake));
+		await settle();
+
+		await store.getState().delete("id-1");
+		await settle();
+
 		const ready = store.getState().state;
 		expect(ready.status).toBe("ready");
 		if (ready.status === "ready") expect(ready.notes).toHaveLength(0);
