@@ -83,14 +83,49 @@ async fn send(
     send_as(state, method, uri, body, TEST_IP).await
 }
 
-async fn mint(state: AppState, epk_fill: u8) -> (StatusCode, Value) {
+/// Decoded mint response — mirrors the JS `MintResponse`. The
+/// on-wire framing is the 21-byte layout described in
+/// `apps/share-backend/src/handlers.rs::encode_mint_response`.
+#[derive(Debug)]
+struct MintBody {
+    code: String,
+    #[allow(dead_code)] // exercised by future TTL-boundary tests
+    expires_at: u64,
+}
+
+const MINT_RESPONSE_VERSION: u8 = 1;
+const MINT_RESPONSE_LEN: usize = 1 + 8 + 12; // version + u64 BE + 12-char code
+
+fn decode_mint_body(bytes: &[u8]) -> MintBody {
+    assert_eq!(
+        bytes.len(),
+        MINT_RESPONSE_LEN,
+        "mint response must be exactly {MINT_RESPONSE_LEN} bytes"
+    );
+    assert_eq!(
+        bytes[0], MINT_RESPONSE_VERSION,
+        "mint response version mismatch"
+    );
+    let expires_at = u64::from_be_bytes(bytes[1..9].try_into().expect("9 bytes"));
+    let code = std::str::from_utf8(&bytes[9..]).expect("ASCII code");
+    MintBody {
+        code: code.to_owned(),
+        expires_at,
+    }
+}
+
+async fn mint(state: AppState, epk_fill: u8) -> (StatusCode, Option<MintBody>) {
     let (status, body) = send(state, Method::POST, "/rendezvous", vec![epk_fill; 32]).await;
-    let json = if body.is_empty() {
-        Value::Null
+    // Only the 200 OK path returns the binary mint framing. Error
+    // responses still come back as the AppError JSON shape; callers
+    // that assert on status alone (rate-limit, bad-request, …) get
+    // `None` here and can ignore the body.
+    let parsed = if status == StatusCode::OK {
+        Some(decode_mint_body(&body))
     } else {
-        serde_json::from_slice(&body).expect("json")
+        None
     };
-    (status, json)
+    (status, parsed)
 }
 
 #[tokio::test]
@@ -99,11 +134,12 @@ async fn round_trips_epk_and_blob() {
     let epk = vec![7u8; 32];
     let expected = code_for_pubkey(&epk);
 
-    let (status, json) = mint(state.clone(), 7).await;
+    let (status, body) = mint(state.clone(), 7).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json["code"].as_str().unwrap(), expected);
+    let body = body.expect("mint body");
+    assert_eq!(body.code, expected);
 
-    let code = json["code"].as_str().unwrap().to_owned();
+    let code = body.code;
 
     let (status, body) = send(
         state.clone(),
@@ -153,8 +189,8 @@ async fn returns_404_for_unknown_code() {
 #[tokio::test]
 async fn rejects_duplicate_blob_upload() {
     let (state, _clock) = make_state();
-    let (_, json) = mint(state.clone(), 2).await;
-    let code = json["code"].as_str().unwrap().to_owned();
+    let (_, body) = mint(state.clone(), 2).await;
+    let code = body.expect("mint body").code;
     let url = format!("/rendezvous/{code}/blob");
 
     let (first, _) = send(state.clone(), Method::POST, &url, vec![9]).await;
@@ -167,8 +203,8 @@ async fn rejects_duplicate_blob_upload() {
 #[tokio::test]
 async fn single_pickup_blob_deleted_on_first_read() {
     let (state, _clock) = make_state();
-    let (_, json) = mint(state.clone(), 3).await;
-    let code = json["code"].as_str().unwrap().to_owned();
+    let (_, body) = mint(state.clone(), 3).await;
+    let code = body.expect("mint body").code;
     let upload_url = format!("/rendezvous/{code}/blob");
     let download_url = upload_url.clone();
 
@@ -185,8 +221,8 @@ async fn single_pickup_blob_deleted_on_first_read() {
 #[tokio::test]
 async fn expired_rendezvous_returns_410_gone() {
     let (state, clock) = make_state();
-    let (_, json) = mint(state.clone(), 4).await;
-    let code = json["code"].as_str().unwrap().to_owned();
+    let (_, body) = mint(state.clone(), 4).await;
+    let code = body.expect("mint body").code;
     advance_clock(&clock, 301);
     let (status, _) = send(state, Method::GET, &format!("/rendezvous/{code}"), vec![]).await;
     assert_eq!(status, StatusCode::GONE);
@@ -199,8 +235,8 @@ async fn expired_blob_is_not_served_even_if_sweep_lags() {
     // run. We exercise that explicitly here — the handler's clock
     // is what gates the read.
     let (state, clock) = make_state();
-    let (_, json) = mint(state.clone(), 6).await;
-    let code = json["code"].as_str().unwrap().to_owned();
+    let (_, body) = mint(state.clone(), 6).await;
+    let code = body.expect("mint body").code;
     let url = format!("/rendezvous/{code}/blob");
 
     let (status, _) = send(state.clone(), Method::POST, &url, vec![1, 2, 3]).await;
@@ -263,8 +299,8 @@ async fn xforwarded_for_does_not_bypass_per_ip_rate_limit() {
 #[tokio::test]
 async fn rejects_oversize_blob() {
     let (state, _clock) = make_state();
-    let (_, json) = mint(state.clone(), 5).await;
-    let code = json["code"].as_str().unwrap().to_owned();
+    let (_, body) = mint(state.clone(), 5).await;
+    let code = body.expect("mint body").code;
     // 64 KiB + 1 byte → tripping the request-body limit layer.
     let oversize = vec![0u8; 64 * 1024 + 1];
     let (status, _) = send(
