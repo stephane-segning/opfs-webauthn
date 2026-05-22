@@ -112,6 +112,15 @@ export function NoteEditor({
 		setConfirmingDelete(false);
 		setError(null);
 	};
+	// Symmetric to `handleCancelDelete`: clear any prior error before
+	// opening the dialog so a stale save/archive failure message isn't
+	// re-rendered inside the modal (which would read as a delete error
+	// the user never triggered). Without this, `error` carries through
+	// from a failed previous action into the freshly-opened confirm.
+	const handleOpenDelete = () => {
+		setError(null);
+		setConfirmingDelete(true);
+	};
 
 	return (
 		<section aria-label={t("editor.region")} className="note-editor">
@@ -180,7 +189,7 @@ export function NoteEditor({
 					<button
 						className="auth-link note-editor-delete"
 						disabled={busy}
-						onClick={() => setConfirmingDelete(true)}
+						onClick={handleOpenDelete}
 						type="button"
 					>
 						{t("editor.delete")}
