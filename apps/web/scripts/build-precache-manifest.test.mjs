@@ -35,6 +35,11 @@ async function makeFixture() {
 	await w("_next/static/build-id/_buildManifest.js", "bm");
 	// Pretend a future build leaked an API payload — must be skipped.
 	await w("_next/static/api/leak.json", "{}");
+	// A root-level `api/` directory must also be excluded: `rel` here
+	// is `api/leak.json` (no leading slash), so a naive
+	// `.includes("/api/")` check would let it through and `addAll`
+	// would 4xx-fail the entire install on first activation.
+	await w("api/leak.json", "{}");
 	await w("404/index.html", "<html>404</html>");
 	return root;
 }
@@ -84,6 +89,16 @@ describe("buildManifest", () => {
 	it("excludes anything under an /api/ path segment", async () => {
 		const manifest = await buildManifest(outDir);
 		expect(manifest.urls.every((u) => !u.includes("/api/"))).toBe(true);
+	});
+
+	it("excludes a root-level api/ directory", async () => {
+		// Regression: `rel` is root-relative (`api/leak.json`, no
+		// leading slash), so a naive `.includes("/api/")` predicate
+		// would let the root-level case slip into `cache.addAll`,
+		// where a 4xx would fail the entire SW install.
+		const manifest = await buildManifest(outDir);
+		expect(manifest.urls).not.toContain("./api/leak.json");
+		expect(manifest.urls.every((u) => !u.startsWith("./api/"))).toBe(true);
 	});
 
 	it("emits URLs as relative paths with forward slashes", async () => {

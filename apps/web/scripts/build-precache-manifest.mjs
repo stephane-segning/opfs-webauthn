@@ -72,10 +72,15 @@ async function walk(dir, root) {
 		}
 		if (!entry.isFile()) continue;
 		if (EXCLUDE_BASENAMES.has(entry.name)) continue;
-		// Excludes anything containing `/api/` — keeps the SW honest
-		// even if a future build ever lands API artefacts in `out/`.
+		// Excludes anything containing an `api/` path segment — keeps
+		// the SW honest even if a future build ever lands API
+		// artefacts in `out/`. `rel` is root-relative with no leading
+		// slash (e.g. `api/foo.json` or `_next/static/api/leak.json`),
+		// so a plain `.includes("/api/")` would miss the root-level
+		// case and pass `api/foo.json` straight into `cache.addAll`,
+		// where a 4xx would fail the entire install.
 		const rel = relative(root, full).split(sep).join(posix.sep);
-		if (rel.includes("/api/")) continue;
+		if (rel.startsWith("api/") || rel.includes("/api/")) continue;
 		out.push(rel);
 	}
 	return out;

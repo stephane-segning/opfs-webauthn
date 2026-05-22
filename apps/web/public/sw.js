@@ -32,6 +32,15 @@
  *     share backend is on the same origin under that prefix in
  *     production and the encrypted-blob lifecycle (pickup-once,
  *     server deletes on read) is incompatible with any cache.
+ *   - `/config.js` (and any `BASE_PATH`-prefixed equivalent) is
+ *     rendered at container start from deployment env vars and is
+ *     not content-hashed; pass it through unconditionally so env
+ *     rotations land on the next request, not on a manual cache
+ *     bust.
+ *   - When the precache manifest is missing (dev / non-static-export
+ *     build), bypass the SW entirely — `urls` is empty, `version` is
+ *     `dev`, and routing through `cacheFirst` would just leak bytes
+ *     into a cache the install hook never primed.
  *   - Navigation requests (HTML): try the network first so a deploy
  *     lands immediately; on failure (offline), fall back to the
  *     cached `index.html`. Static export means every route renders
@@ -57,6 +66,22 @@
  *   precache-everything strategy the new worker has the full new
  *   shell ready before it activates, so taking over immediately is
  *   safe — and gets users their fix without a tab reload.
+ *
+ * Manual smoke (no unit tests for this file — runs inside a real
+ * SW context that vitest doesn't emulate):
+ * 1. `NEXT_OUTPUT_EXPORT=1 pnpm --filter @opfs/web build` to produce
+ *    a real `out/sw-manifest.js`. Serve `out/` (e.g. `npx serve`),
+ *    load the page, check DevTools → Application → Service Workers
+ *    shows it active and Cache Storage holds `opfs-shell-<hash>`
+ *    with the manifest URLs.
+ * 2. Re-request `/config.js` with the Network tab open: it must
+ *    miss the SW cache every time (no "(from ServiceWorker)" entry
+ *    served from cache; an immediate change to the file on disk
+ *    must surface on the next reload).
+ * 3. `pnpm --filter @opfs/web build` (no `NEXT_OUTPUT_EXPORT`):
+ *    serve the worker manually and confirm Cache Storage stays
+ *    empty — every fetch should hit network only, and no
+ *    `opfs-shell-dev` cache should appear.
  */
 
 // `sw-manifest.js` is emitted by `scripts/build-precache-manifest.mjs`,
@@ -114,6 +139,17 @@ self.addEventListener("message", (event) => {
 	if (event.data === "SKIP_WAITING") self.skipWaiting();
 });
 
+// `/config.js` is rendered at container start from deployment env
+// vars (see `src/app/layout.tsx` and `docker/40-render-config.sh`);
+// it is **not** content-hashed, so caching it would mask deploy-time
+// env rotations until the cache is manually busted. Treat it the
+// same as `/api/*`: never cache, always go to the network. The check
+// covers both the bare `/config.js` and any `BASE_PATH`-prefixed
+// form a sub-path deploy produces (e.g. `/myapp/config.js`).
+function isRuntimeConfig(pathname) {
+	return pathname === "/config.js" || pathname.endsWith("/config.js");
+}
+
 self.addEventListener("fetch", (event) => {
 	const { request } = event;
 	if (request.method !== "GET") return;
@@ -121,6 +157,16 @@ self.addEventListener("fetch", (event) => {
 	const url = new URL(request.url);
 	if (url.origin !== self.location.origin) return;
 	if (url.pathname.includes("/api/")) return;
+	if (isRuntimeConfig(url.pathname)) return;
+
+	// Dev / non-static-export build: no `sw-manifest.js`, so the
+	// precache list is empty and `CACHE_NAME` is the placeholder
+	// `opfs-shell-dev`. Routing every same-origin GET through
+	// `cacheFirst` here would silently accumulate bytes in a
+	// `dev`-keyed cache that `install` never primed and that
+	// `activate` won't purge across deploys (the version never
+	// changes). Bypass entirely — network-only, no offline shell.
+	if (PRECACHE.urls.length === 0) return;
 
 	if (request.mode === "navigate") {
 		event.respondWith(navigationStrategy(request));
