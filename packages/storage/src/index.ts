@@ -177,13 +177,21 @@ export async function createRepo(opts: CreateRepoOptions): Promise<Repo> {
 		// in flight regardless, but awaiting `whenReady` keeps the
 		// caller's error path tied to a real transport failure rather
 		// than a "waiting forever" timeout.
+		//
+		// Any failure of the leader tier — OPFS unavailable, Web Locks
+		// request rejection (`SecurityError`, `InvalidStateError`),
+		// `whenReady` rejection on close, bootstrap error — degrades
+		// to the plain dedicated worker. The dedicated tier is our
+		// last-resort safety net; it sacrifices cross-tab safety but
+		// keeps the app usable. We log so the failure isn't silent.
 		try {
 			await leader.whenReady;
 			return await bootRepo(leader, opts.vault);
 		} catch (err) {
-			if (!isOpfsUnavailable(err)) throw err;
 			console.warn(
-				"opfs-storage: leader-election writer can't open OPFS either; falling back to per-tab dedicated worker",
+				isOpfsUnavailable(err)
+					? "opfs-storage: leader-election writer can't open OPFS either; falling back to per-tab dedicated worker"
+					: "opfs-storage: leader-election transport failed; falling back to per-tab dedicated worker",
 				err,
 			);
 			leader.close();

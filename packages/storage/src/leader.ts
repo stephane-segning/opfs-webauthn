@@ -90,6 +90,17 @@ type PairRequest = {
 	readonly channel: string;
 };
 /**
+ * Leader's acknowledgement that it has opened its end of the per-pair
+ * channel and is ready to receive RPC envelopes. The client uses this
+ * to gate `whenReady` so the first `bootstrap` envelope can't be
+ * posted into the void before the leader has subscribed.
+ */
+type PairAck = {
+	readonly kind: "pair-ack";
+	readonly leaderId: string;
+	readonly clientId: string;
+};
+/**
  * Late-join probe. A tab that comes up *after* a leader has already
  * announced won't see the announce (BC doesn't replay), so it posts
  * `leader-query`. The current leader, if any, replies with a fresh
@@ -97,7 +108,20 @@ type PairRequest = {
  * next handover.
  */
 type LeaderQuery = { readonly kind: "leader-query" };
-export type LeaderMessage = LeaderAnnouncement | PairRequest | LeaderQuery;
+export type LeaderMessage =
+	| LeaderAnnouncement
+	| PairRequest
+	| PairAck
+	| LeaderQuery;
+
+/**
+ * Time the client waits for a `pair-ack` before re-sending its
+ * `pair-request`. The handshake races leader-side `pair-request`
+ * delivery vs. discovery-channel subscribe order; a retry covers the
+ * (rare) case where the leader hadn't subscribed yet when the client
+ * posted.
+ */
+const PAIR_ACK_RETRY_MS = 500;
 
 /**
  * What the leader needs in order to host the writer. Injected so the
@@ -372,6 +396,17 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 	let pairChannel: BroadcastChannel | null = null;
 	let currentLeaderId: string | null = null;
 	let closed = false;
+	/**
+	 * Set once we've issued a pair-request for the *current* leader id
+	 * and are waiting for the matching `pair-ack`. Cleared on ack so
+	 * subsequent leader changes can re-arm the handshake. Drives the
+	 * retry timer below.
+	 */
+	let pendingPair: {
+		leaderId: string;
+		channel: string;
+		timer: ReturnType<typeof setTimeout> | null;
+	} | null = null;
 
 	// Leader-side state, populated only on the tab that wins the lock.
 	let writer: WorkerLike | null = null;
@@ -383,15 +418,38 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 	let nextLeaderEnvelopeId = 1;
 	const allocateLeaderId = (): number => nextLeaderEnvelopeId++;
 
+	// Web-Locks lifecycle plumbing. `resolveLock` settles the never-
+	// resolving promise we return from the lock callback — calling it
+	// releases the `opfs-db-writer` lock so peer tabs can advance. The
+	// ready promise is settable from either side so a lock-request
+	// rejection (rare: `SecurityError`, `InvalidStateError`) or a
+	// `close()` before pairing surfaces as a real rejection instead of
+	// an indefinite hang.
+	let resolveLock: (() => void) | null = null;
 	let resolveReady: (() => void) | null = null;
-	const whenReady = new Promise<void>((resolve) => {
+	let rejectReady: ((err: Error) => void) | null = null;
+	let readySettled = false;
+	const whenReady = new Promise<void>((resolve, reject) => {
 		resolveReady = resolve;
+		rejectReady = reject;
 	});
+	// Avoid unhandled-rejection noise: callers that don't await
+	// `whenReady` (e.g. tests that only exercise the transport's
+	// teardown path) shouldn't see a rejection bubble to the host.
+	whenReady.catch(() => {});
 	const markReady = (): void => {
-		if (resolveReady) {
-			resolveReady();
-			resolveReady = null;
-		}
+		if (readySettled) return;
+		readySettled = true;
+		resolveReady?.();
+		resolveReady = null;
+		rejectReady = null;
+	};
+	const failReady = (err: Error): void => {
+		if (readySettled) return;
+		readySettled = true;
+		rejectReady?.(err);
+		resolveReady = null;
+		rejectReady = null;
 	};
 
 	const onPairMessage = (event: MessageEvent): void => {
@@ -421,6 +479,18 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 		pairChannel = null;
 	};
 
+	const clearPendingPair = (): void => {
+		if (pendingPair?.timer) clearTimeout(pendingPair.timer);
+		pendingPair = null;
+	};
+
+	/**
+	 * Wire the pair channel locally and replay any buffered envelopes.
+	 * Does NOT mark ready — readiness for non-leader tabs is gated on
+	 * the `pair-ack` (BC delivery is async, so the leader hasn't
+	 * necessarily subscribed by the time we'd otherwise resolve).
+	 * Leader-side self-pair is special-cased in `becomeLeader`.
+	 */
 	const attachPair = (channel: BroadcastChannel): void => {
 		detachPair();
 		pairChannel = channel;
@@ -433,22 +503,10 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 		for (const pending of inFlight.values()) {
 			channel.postMessage(pending.data);
 		}
-		markReady();
 	};
 
-	const pairWithLeader = (announcedLeaderId: string): void => {
+	const sendPairRequest = (announcedLeaderId: string, name: string): void => {
 		if (closed) return;
-		// Already paired with this leader? Don't churn a new channel.
-		if (currentLeaderId === announcedLeaderId && pairChannel) return;
-		currentLeaderId = announcedLeaderId;
-		const name = pairChannelName(announcedLeaderId, clientId);
-		const channel = deps.newBroadcastChannel(name);
-		// Attach our end first so we can hear the leader's responses
-		// before announcing on the discovery channel — the leader will
-		// open its own end of `name` on receiving the pair-request, and
-		// the first RPC the client sends is buffered into `inFlight` and
-		// replayed via `attachPair`.
-		attachPair(channel);
 		const pair: PairRequest = {
 			kind: "pair-request",
 			leaderId: announcedLeaderId,
@@ -456,6 +514,46 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 			channel: name,
 		};
 		discovery.postMessage(pair);
+	};
+
+	const pairWithLeader = (announcedLeaderId: string): void => {
+		if (closed) return;
+		// Already paired with this leader? Don't churn a new channel.
+		if (currentLeaderId === announcedLeaderId && pairChannel) return;
+		currentLeaderId = announcedLeaderId;
+		clearPendingPair();
+		const name = pairChannelName(announcedLeaderId, clientId);
+		const channel = deps.newBroadcastChannel(name);
+		// Attach our end first so we can hear the leader's responses
+		// the moment its bridge starts forwarding. The `pair-ack` rides
+		// the discovery channel (BC can't transfer ports either way),
+		// is filtered client-side by `clientId`, and signals that the
+		// leader has subscribed to the per-pair BC — only then is it
+		// safe to mark `whenReady`.
+		attachPair(channel);
+		// Schedule a retry on no-ack: BC delivery is async and a stale
+		// leader announce could lose the race. The leader is idempotent
+		// on duplicate pair-requests (it disposes the old bridge and
+		// opens a fresh one), so re-sending is safe.
+		const arm = (): void => {
+			pendingPair = {
+				leaderId: announcedLeaderId,
+				channel: name,
+				timer: setTimeout(() => {
+					if (
+						!pendingPair ||
+						pendingPair.leaderId !== announcedLeaderId ||
+						closed
+					) {
+						return;
+					}
+					sendPairRequest(announcedLeaderId, name);
+					arm();
+				}, PAIR_ACK_RETRY_MS),
+			};
+		};
+		arm();
+		sendPairRequest(announcedLeaderId, name);
 	};
 
 	const onDiscoveryMessage = (event: MessageEvent<LeaderMessage>): void => {
@@ -489,6 +587,28 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 				allocateLeaderId,
 			);
 			bridges.set(msg.clientId, bridge);
+			// Now that the leader has subscribed to the per-pair BC,
+			// ack the client so it can resolve `whenReady` and start
+			// pushing RPC envelopes. Without this, BC delivery latency
+			// could let the client post `bootstrap` before the leader
+			// is listening, dropping the envelope silently.
+			const ack: PairAck = {
+				kind: "pair-ack",
+				leaderId,
+				clientId: msg.clientId,
+			};
+			discovery.postMessage(ack);
+			return;
+		}
+		if (msg.kind === "pair-ack") {
+			// Client-side: only react to the ack addressed at us, for
+			// the leader we're currently pairing with. Anything else is
+			// a stale ack from a previous pairing (drop) or another
+			// tab's ack (ignore — discovery is shared).
+			if (msg.clientId !== clientId) return;
+			if (!pendingPair || pendingPair.leaderId !== msg.leaderId) return;
+			clearPendingPair();
+			markReady();
 			return;
 		}
 		if (msg.kind === "leader-query") {
@@ -536,8 +656,12 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 		bridges.set(clientId, bridge);
 		// Pretend the announcement happened for `currentLeaderId`
 		// bookkeeping, then attach the local pair channel directly.
+		// The leader is its own client: we already synchronously built
+		// the bridge above, so unlike cross-tab clients we don't need
+		// to wait for a `pair-ack` — both ends are subscribed already.
 		currentLeaderId = leaderId;
 		attachPair(clientSide);
+		markReady();
 
 		// Announce to peers so any tab that started before us can pair.
 		// Tabs that start after will see this announce too because BC
@@ -563,29 +687,57 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 			writer = null;
 		}
 		leaderId = null;
+		// Release the Web Lock so peer tabs queued on `opfs-db-writer`
+		// can be granted. Without this, the lock would be held until
+		// page unload — `Repo.close()` while the page survives would
+		// leave every other tab blocked indefinitely.
+		if (resolveLock) {
+			const r = resolveLock;
+			resolveLock = null;
+			try {
+				r();
+			} catch {
+				// best-effort: nothing we can do if release throws
+			}
+		}
 	};
 
 	// Kick off the election. Web Locks queues callers FIFO; only one
 	// callback at a time holds the lock. The callback returns a
-	// promise that never resolves so the lock survives until the
-	// tab unloads and the browser auto-releases it.
+	// promise we keep open so the lock survives until either the tab
+	// unloads (browser auto-releases) or `close()` resolves the
+	// promise explicitly — required so a `Repo.close()` while the
+	// page is still alive actually releases the lock to peer tabs.
 	const lockPromise = deps.locks
 		.request(
 			LEADER_LOCK_NAME,
 			{ mode: "exclusive" },
 			() =>
-				new Promise<void>(() => {
+				new Promise<void>((release) => {
+					// If `close()` ran while we were still queued for the
+					// lock, the grant arrives on a torn-down transport.
+					// Release immediately so the next queued peer gets a
+					// turn instead of inheriting an orphaned lock.
+					if (closed) {
+						release();
+						return;
+					}
+					resolveLock = release;
 					becomeLeader();
 				}),
 		)
 		.catch((err: unknown) => {
-			// Lock acquisition failure is rare (the API doesn't reject
-			// on contention — it just queues). Surface the error to
-			// listeners so `WorkerClient` rejects in-flight requests
-			// instead of hanging.
+			// Lock acquisition failure (e.g. `SecurityError` in non-
+			// secure contexts, `InvalidStateError` on a detached
+			// document). Without surfacing this, `whenReady` never
+			// settles and `createRepo` hangs forever.
 			const event = new Event("error");
 			for (const l of errorListeners) l(event);
-			throw err;
+			failReady(
+				err instanceof Error
+					? err
+					: new Error(`leader lock request rejected: ${String(err)}`),
+			);
 		});
 	void lockPromise;
 
@@ -629,6 +781,12 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 		close: () => {
 			if (closed) return;
 			closed = true;
+			clearPendingPair();
+			// If we never reached readiness, surface that as a real
+			// rejection rather than a forever-pending promise. Callers
+			// awaiting `whenReady` (e.g. `createRepo`) need to see the
+			// failure to fall through to the next transport tier.
+			failReady(new Error("leader transport closed before ready"));
 			discovery.removeEventListener("message", onDiscoveryMessage);
 			try {
 				discovery.close();
@@ -636,7 +794,20 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 				// already closed
 			}
 			detachPair();
+			// `giveUpLeadership` releases the lock if we currently hold
+			// it (`resolveLock` is set inside the lock callback). Also
+			// release if we were still queued — the `.catch` above will
+			// fire and is a no-op for an already-settled `whenReady`.
 			giveUpLeadership();
+			if (resolveLock) {
+				const r = resolveLock;
+				resolveLock = null;
+				try {
+					r();
+				} catch {
+					// best-effort
+				}
+			}
 			messageListeners.clear();
 			errorListeners.clear();
 			inFlight.clear();

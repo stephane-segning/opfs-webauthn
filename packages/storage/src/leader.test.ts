@@ -20,7 +20,7 @@
  */
 
 import { CryptoVault } from "@opfs/core-wasm";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { Connection, type PortLike } from "./connection.js";
 import { openInMemoryDatabase } from "./database.js";
@@ -36,6 +36,89 @@ import { ensureWasm } from "./wasm.js";
 import { createDispatcher } from "./worker-handlers.js";
 
 beforeAll(ensureWasm);
+
+/**
+ * `navigator.locks` polyfill, scoped to this test file.
+ *
+ * CI runs on Node 20 which does *not* ship `navigator.locks` (Node
+ * gained it in 22). The `supportsLeaderElection()` test needs the
+ * detection to return `true` on every Node version the project's CI
+ * exercises, so we install a minimal stub matching the spec's
+ * `LockManager.request` signature. The stub is only consulted by the
+ * feature-detection test — every other test injects a `FakeLockManager`
+ * explicitly — but `supportsLeaderElection` reads `navigator.locks`
+ * directly so the global has to exist.
+ *
+ * Restored in `afterAll` so we don't leak the polyfill into adjacent
+ * test files (`test-setup.ts` is shared; per-file shims must clean up).
+ */
+type LocksGlobal = {
+	navigator?: { locks?: unknown };
+};
+type PolyfillState = {
+	addedNavigator: boolean;
+	installedLocks: boolean;
+};
+const polyfill: PolyfillState = {
+	addedNavigator: false,
+	installedLocks: false,
+};
+beforeAll(() => {
+	const g = globalThis as LocksGlobal;
+	if (!g.navigator) {
+		// Defining as a plain data property keeps the cleanup path
+		// uncomplicated (no descriptor juggling on platforms where the
+		// real `Navigator` exposes `locks` as a getter).
+		Object.defineProperty(globalThis, "navigator", {
+			value: {},
+			writable: true,
+			configurable: true,
+		});
+		polyfill.addedNavigator = true;
+	}
+	const nav = g.navigator as { locks?: unknown };
+	if (!nav.locks) {
+		// Stub matches the spec's request signature minimally — the
+		// `supportsLeaderElection()` test only checks truthiness, and
+		// every other test in this file injects a `FakeLockManager`
+		// rather than calling through to `navigator.locks`.
+		try {
+			Object.defineProperty(nav, "locks", {
+				value: { request: () => new Promise(() => {}) },
+				writable: true,
+				configurable: true,
+			});
+			polyfill.installedLocks = true;
+		} catch {
+			// On Node ≥ 22 `navigator.locks` is a non-configurable
+			// accessor — the host platform already satisfies the
+			// feature gate so we don't need to polyfill, and a failed
+			// install means the original is still in place.
+		}
+	}
+});
+afterAll(() => {
+	if (polyfill.installedLocks) {
+		const nav = (globalThis as LocksGlobal).navigator as
+			| { locks?: unknown }
+			| undefined;
+		if (nav) {
+			try {
+				delete nav.locks;
+			} catch {
+				// best-effort cleanup; nothing else in the test suite
+				// reads `navigator.locks` directly
+			}
+		}
+	}
+	if (polyfill.addedNavigator) {
+		try {
+			delete (globalThis as { navigator?: unknown }).navigator;
+		} catch {
+			// best-effort
+		}
+	}
+});
 
 function makeVault(): CryptoVault {
 	const prfOutput = new Uint8Array(32).fill(0xa5);
@@ -259,10 +342,11 @@ function makeDeps(
 
 describe("Web-Locks leader-election transport", () => {
 	it("feature detection follows the host platform", () => {
-		// Node ≥ 22 ships navigator.locks + BroadcastChannel, so this
-		// returns true under vitest. The detection rule itself is what
-		// we want to lock in (changing either branch is a behaviour
-		// change worth re-reading the ADR for).
+		// Node ≥ 22 ships `navigator.locks`; on Node 20 (the project's
+		// CI runtime) the `beforeAll` above installs a minimal stub so
+		// detection passes deterministically. The check we're locking
+		// in is "both APIs present → true" — changing either branch is
+		// a behaviour change worth re-reading the ADR for.
 		expect(supportsLeaderElection()).toBe(true);
 	});
 
@@ -433,6 +517,151 @@ describe("Web-Locks leader-election transport", () => {
 		expect(() =>
 			transport.postMessage({ id: 999, request: { kind: "ping" } }),
 		).not.toThrow();
+	});
+
+	it("close() releases the Web Lock so a queued tab is promoted to leader", async () => {
+		// Reproduces the bug where the leader's lock callback returned
+		// a never-resolving promise with no externally callable
+		// resolver. `Repo.close()` (and therefore `WorkerClient.
+		// terminate()` and `transport.close()`) would tear down the
+		// page-side state while the lock stayed held until tab unload.
+		// Every other tab on the origin queued on `opfs-db-writer`
+		// would then hang forever in `createRepo()`.
+		const db = await openDb();
+		const { worker: workerA } = makeWriter(db);
+		const { worker: workerB } = makeWriter(db);
+		const locks = new FakeLockManager();
+		const channelSuffix = `close-releases-${Math.random()}`;
+
+		// Tab A wins the lock.
+		const depsA = makeDeps(channelSuffix, locks, "leaderA", () => workerA);
+		const tabA = createLeaderTransport(depsA);
+		await tabA.whenReady;
+
+		// Tab B queues behind A — its writerFactory only runs once it
+		// becomes leader, which requires A to release.
+		let tabBBecameLeader = false;
+		const depsB = makeDeps(channelSuffix, locks, "leaderB", () => {
+			tabBBecameLeader = true;
+			return workerB;
+		});
+		const tabB = createLeaderTransport(depsB);
+
+		// Closing A must release the lock without us calling
+		// `releaseHeld()` manually — `close()` is the only signal in
+		// production.
+		tabA.close();
+
+		try {
+			await tabB.whenReady;
+			expect(tabBBecameLeader).toBe(true);
+		} finally {
+			tabB.close();
+		}
+	});
+
+	it("close() before readiness rejects whenReady instead of hanging", async () => {
+		// A transport that's torn down before it ever pairs (e.g.
+		// `createRepo` aborting after a parallel failure) must surface
+		// the close as a rejection on `whenReady`. Resolving it would
+		// claim "we're paired" to the caller; never settling would
+		// leave `createRepo` awaiting forever.
+		const locks = new FakeLockManager();
+		// Pre-occupy the lock so the new transport stays queued.
+		const blocker = createLeaderTransport(
+			makeDeps(
+				`blocked-${Math.random()}`,
+				locks,
+				"blocker",
+				// Blocker doesn't need a real writer; it just needs to
+				// hold the lock. We give it a no-op stub WorkerLike.
+				() => ({
+					postMessage: () => {},
+					addEventListener: (() => {}) as WorkerLike["addEventListener"],
+					removeEventListener: (() => {}) as WorkerLike["removeEventListener"],
+					close: () => {},
+				}),
+			),
+		);
+		await blocker.whenReady;
+
+		const queued = createLeaderTransport(
+			makeDeps(`blocked-${Math.random()}`, locks, "queued", () => {
+				throw new Error("queued transport should not become leader");
+			}),
+		);
+
+		// Close before B is granted — whenReady must reject.
+		queued.close();
+		await expect(queued.whenReady).rejects.toThrow(/closed before ready/);
+
+		blocker.close();
+	});
+
+	it("a lock request that rejects surfaces as whenReady rejection", async () => {
+		// `navigator.locks.request` can reject with SecurityError or
+		// InvalidStateError (non-secure context, detached document).
+		// Before the fix, the `.catch` only emitted an `error` event
+		// and rethrew into an unobserved promise; `whenReady` never
+		// settled and `createRepo` hung indefinitely.
+		const rejectingLocks: LockManagerLike = {
+			request: () => Promise.reject(new Error("SecurityError: stub")),
+		};
+		const channelSuffix = `reject-${Math.random()}`;
+		const transport = createLeaderTransport({
+			locks: rejectingLocks,
+			newBroadcastChannel: (name) =>
+				new BroadcastChannel(`${name}-${channelSuffix}`),
+			writerFactory: () => {
+				throw new Error("writerFactory must not run if the lock rejects");
+			},
+			newLeaderId: counterIds("rej"),
+			newClientId: counterIds("rej-client"),
+		});
+		await expect(transport.whenReady).rejects.toThrow(/SecurityError/);
+		transport.close();
+	});
+
+	it("clients only resolve whenReady after the leader has acked the pairing", async () => {
+		// Guards finding #4: BC delivery is async + non-replaying, so
+		// the leader-elected → pair-request → bridge-open chain races
+		// the client's "I have a pair channel now, mark ready" code.
+		// The pair-ack closes that race: clients hold `whenReady` open
+		// until the leader confirms its end of the per-pair BC is up.
+		const db = await openDb();
+		const { worker } = makeWriter(db);
+		const locks = new FakeLockManager();
+		const channelSuffix = `ack-${Math.random()}`;
+		const vault = makeVault();
+
+		const depsA = makeDeps(channelSuffix, locks, "leaderA", () => worker);
+		const tabA = createLeaderTransport(depsA);
+		await tabA.whenReady;
+
+		const depsB = makeDeps(channelSuffix, locks, "tabB", () => {
+			throw new Error("tabB must not become leader");
+		});
+		const tabB = createLeaderTransport(depsB);
+		// tabB resolves whenReady only after pair-ack → first RPC
+		// reaches the leader. If the ack handshake regresses, this
+		// will either hang (handler dropped the envelope) or resolve
+		// before bootstrap can complete.
+		await tabB.whenReady;
+		const clientB = new WorkerClient(tabB);
+		const repoB = new Repo(clientB, vault);
+		await repoB.bootstrap();
+		// A round-trip after readiness confirms the leader's bridge is
+		// genuinely listening — the test we'd otherwise lose without
+		// pair-ack.
+		const note = await repoB.upsertNote({
+			title: "ack-gated",
+			body: "x",
+		});
+		const fetched = await repoB.getNote(note.id);
+		expect(fetched?.title).toBe("ack-gated");
+
+		tabA.close();
+		tabB.close();
 	});
 
 	// Wait briefly so the polling helper is exercised when handover
