@@ -62,7 +62,7 @@ flowchart TB
     Share["@opfs/share-client<br/>X25519 + HTTP"]
 
     UI -->|enroll / unlock| Auth
-    Auth -->|PRF output<br/>(in-wasm only)| Wasm
+    Auth -->|"PRF output<br/>(in-wasm only)"| Wasm
     Wasm -->|wrapped DEK| Storage
     Storage -->|encrypted rows| OPFS[("OPFS<br/>sqlite.db")]
     UI -->|send/receive| Share
@@ -81,12 +81,6 @@ flowchart TB
 
   Browser -->|"HTTPS<br/>(static assets)"| Web
   Share -->|"HTTPS /api/<br/>encrypted blob + epk"| Rendezvous
-
-  style Wasm fill:#fff4e6
-  style Rendezvous fill:#e6f4ff
-  style Web fill:#e6f4ff
-  style OPFS fill:#f0f0f0
-  style Passkey fill:#ffe6f4
 ```
 
 ## Key hierarchy
@@ -106,10 +100,6 @@ flowchart LR
   DEK -->|"AES-GCM encrypt"| Rows
   KEK -->|"AES-GCM wrap"| WrappedDEK
   WrappedDEK -.->|"on disk"| WrappedDEK
-
-  style PRF stroke-dasharray: 5 5,stroke:#999
-  style DEK fill:#fff4e6
-  style KEK fill:#fff4e6
 ```
 
 The **DEK** and the derived **KEK** never appear in JS-visible
