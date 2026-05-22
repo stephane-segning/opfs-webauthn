@@ -4,12 +4,11 @@ import type { CryptoVault } from "@opfs/core-wasm";
 import type { Note, Repo } from "@opfs/storage";
 import { useTranslations } from "next-intl";
 import { useMemo, useState } from "react";
-
+import { useIdleVaultLock } from "../app/use-idle-vault-lock";
 import type { SharedNote } from "../share/note-codec";
 import { ReceiveShareDialog } from "../share/receive-dialog";
 import { SendShareDialog } from "../share/send-dialog";
 import { getShareConfig } from "../share/share-config";
-
 import { NoteEditor } from "./note-editor";
 import { NotesList } from "./notes-list";
 import { useNotes } from "./use-notes";
@@ -37,6 +36,10 @@ export type NotesShellProps = {
 
 export function NotesShell({ vault, onLock }: NotesShellProps) {
 	const t = useTranslations("notes");
+	// Idle auto-lock (ADR 0005): lock after 5 minutes of inactivity
+	// across ALL tabs. The hook is active for the entire lifetime of
+	// NotesShell (i.e. while the vault is open) and cleans up on unmount.
+	useIdleVaultLock(onLock);
 	const repoState = useNotesRepo(vault);
 
 	if (repoState.status === "loading" || repoState.status === "idle") {
