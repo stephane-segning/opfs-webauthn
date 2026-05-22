@@ -22,6 +22,7 @@
 
 import type { CryptoVault } from "@opfs/core-wasm";
 
+import { makeLeaderTransport } from "./leader.js";
 import { Repo } from "./repo.js";
 import { WorkerClient, type WorkerLike } from "./rpc.js";
 import { ensureWasm } from "./wasm.js";
@@ -130,14 +131,19 @@ async function bootRepo(
 /**
  * Boot the storage worker and return a ready-to-use `Repo`.
  *
- * If `SharedWorker` is available we try it first (ADR 0006: one
- * writer across tabs). If `bootstrap()` rejects with sqlite-wasm's
- * "Missing required OPFS APIs." — currently Firefox, which exposes
- * `createSyncAccessHandle` only in dedicated workers — we tear that
- * worker down and retry on a `DedicatedWorker`. Per-tab semantics
- * lose the cross-tab single-writer guarantee but the app stays
- * usable, which is the right trade-off until SharedWorker support
- * for OPFS-SAH is universal.
+ * Transport ladder (ADR 0006):
+ *
+ *  1. `SharedWorker` — single writer across all tabs. Ideal.
+ *  2. Web-Locks leader election — one tab owns a dedicated `Worker`,
+ *     others pair via `MessagePort`. Used when SharedWorker can't
+ *     open OPFS (Firefox today: `createSyncAccessHandle` is
+ *     dedicated-worker-only).
+ *  3. Plain dedicated `Worker` — no cross-tab safety. Last resort
+ *     for environments that lack `navigator.locks` (very old
+ *     browsers) so the app stays usable single-tab.
+ *
+ * If `bootstrap()` rejects with sqlite-wasm's "Missing required
+ * OPFS APIs." we tear the failing tier down and step to the next.
  */
 export async function createRepo(opts: CreateRepoOptions): Promise<Repo> {
 	// `Repo` reaches into wasm-backed helpers (`generateRowId`,
@@ -155,12 +161,32 @@ export async function createRepo(opts: CreateRepoOptions): Promise<Repo> {
 		} catch (err) {
 			if (!isOpfsUnavailable(err)) throw err;
 			// SharedWorker can't open OPFS on this browser. Fall through
-			// to the dedicated worker so the user still gets a working
-			// app, just per-tab instead of cross-tab.
+			// to leader-election so we keep the cross-tab single-writer
+			// guarantee even though we can't put the writer in a shared
+			// worker.
 			console.warn(
-				"opfs-storage: SharedWorker lacks createSyncAccessHandle; falling back to dedicated worker",
+				"opfs-storage: SharedWorker lacks createSyncAccessHandle; trying Web-Locks leader election",
 				err,
 			);
+		}
+	}
+	const leader = makeLeaderTransport(makeDedicatedTransport);
+	if (leader) {
+		// Wait until we've either become the leader or paired with one
+		// before issuing `bootstrap`. The transport buffers envelopes
+		// in flight regardless, but awaiting `whenReady` keeps the
+		// caller's error path tied to a real transport failure rather
+		// than a "waiting forever" timeout.
+		try {
+			await leader.whenReady;
+			return await bootRepo(leader, opts.vault);
+		} catch (err) {
+			if (!isOpfsUnavailable(err)) throw err;
+			console.warn(
+				"opfs-storage: leader-election writer can't open OPFS either; falling back to per-tab dedicated worker",
+				err,
+			);
+			leader.close();
 		}
 	}
 	return bootRepo(makeDedicatedTransport(), opts.vault);
