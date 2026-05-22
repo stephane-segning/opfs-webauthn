@@ -5,6 +5,7 @@
  */
 
 import { ShareError, shareErrorForStatus } from "./errors.js";
+import { decodeMintResponse } from "./mint-response.js";
 
 export type FetchLike = typeof globalThis.fetch;
 
@@ -20,7 +21,6 @@ export type RendezvousMint = {
 };
 
 const APP_OCTET_STREAM = "application/octet-stream";
-const APP_JSON = "application/json";
 
 /**
  * `fetch`'s DOM-lib `BodyInit` doesn't accept the generic
@@ -80,26 +80,16 @@ export class RendezvousClient {
 			"mint request failed",
 		);
 		if (!response.ok) throw shareErrorForStatus(response.status, "mint");
-		// A malformed JSON body would otherwise surface as a raw
-		// `SyntaxError`; wrap it as a typed `protocol` error so
-		// callers branch on `kind` like every other failure path.
-		let json: { code?: unknown; expiresAt?: unknown };
-		try {
-			json = (await response.json()) as typeof json;
-		} catch (err) {
-			const cause = err instanceof Error ? `: ${err.message}` : "";
-			throw new ShareError(
-				"protocol",
-				`mint response was not valid JSON${cause}`,
-			);
-		}
-		if (typeof json.code !== "string" || typeof json.expiresAt !== "number") {
-			throw new ShareError(
-				"protocol",
-				"mint response missing `code` or `expiresAt`",
-			);
-		}
-		return { code: json.code, expiresAt: json.expiresAt };
+		// `decodeMintResponse` already throws typed `ShareError`s on
+		// framing problems (wrong length, bad version, non-ASCII).
+		// Wrap the underlying `arrayBuffer()` read so a network
+		// hiccup mid-body surfaces as a `network` ShareError instead
+		// of a bare `TypeError`.
+		const bytes = await networkSafe(
+			async () => new Uint8Array(await response.arrayBuffer()),
+			"mint response read failed",
+		);
+		return decodeMintResponse(bytes);
 	}
 
 	/** `GET /rendezvous/:code` — sender fetches the recipient's epk. */
@@ -156,4 +146,4 @@ export class RendezvousClient {
 	}
 }
 
-export { APP_JSON, APP_OCTET_STREAM };
+export { APP_OCTET_STREAM };

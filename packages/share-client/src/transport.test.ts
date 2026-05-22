@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ShareError } from "./errors.js";
+import { encodeMintResponse } from "./mint-response.js";
 import { type FetchLike, RendezvousClient } from "./transport.js";
 
 const BASE = "https://share.test/backend";
@@ -34,15 +35,21 @@ function makeClient(handler: (req: Recorded) => Response): {
 }
 
 describe("RendezvousClient.mint", () => {
-	it("POSTs the epk and parses the JSON response", async () => {
+	it("POSTs the epk and decodes the binary mint response", async () => {
+		// Cast through `BodyInit` for the same reason the production
+		// `asBody` helper in transport.ts does — `Uint8Array<ArrayBufferLike>`
+		// is runtime-accepted everywhere but the DOM lib `Response`
+		// constructor types ask for the narrower shape.
+		const body = encodeMintResponse({
+			code: "AAAAAAAAAAAA",
+			expiresAt: 1234,
+		}) as unknown as BodyInit;
 		const { client, calls } = makeClient(
 			() =>
-				new Response(
-					JSON.stringify({ code: "AAAAAAAAAAAA", expiresAt: 1234 }),
-					{
-						status: 200,
-					},
-				),
+				new Response(body, {
+					status: 200,
+					headers: { "content-type": "application/octet-stream" },
+				}),
 		);
 		const epk = new Uint8Array(32).fill(9);
 		const result = await client.mint(epk);
@@ -67,21 +74,25 @@ describe("RendezvousClient.mint", () => {
 		});
 	});
 
-	it("maps a malformed JSON body to a typed protocol error", async () => {
+	it("maps a too-short body to a typed protocol error", async () => {
+		// Anything that isn't the fixed 21-byte framing is invalid.
 		const { client } = makeClient(
-			() => new Response("not json at all", { status: 200 }),
+			() => new Response(new Uint8Array(20), { status: 200 }),
 		);
 		await expect(client.mint(new Uint8Array(32))).rejects.toMatchObject({
 			kind: "protocol",
 		});
 	});
 
-	it("maps a JSON body missing `code` or `expiresAt` to protocol", async () => {
+	it("maps a body with a wrong version byte to protocol", async () => {
+		const valid = encodeMintResponse({
+			code: "AAAAAAAAAAAA",
+			expiresAt: 1234,
+		});
+		const tampered = new Uint8Array(valid);
+		tampered[0] = 99; // bogus version
 		const { client } = makeClient(
-			() =>
-				new Response(JSON.stringify({ code: "AAAAAAAAAAAA" }), {
-					status: 200,
-				}),
+			() => new Response(tampered, { status: 200 }),
 		);
 		await expect(client.mint(new Uint8Array(32))).rejects.toMatchObject({
 			kind: "protocol",
