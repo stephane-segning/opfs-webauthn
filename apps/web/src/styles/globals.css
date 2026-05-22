@@ -161,6 +161,27 @@ body {
 	font-size: 0.9rem;
 }
 
+/* Destructive CTA — irreversible actions (hard-delete confirmation).
+ * Falls back to a hard-coded red until the design-tokens package
+ * adds a `--danger` ramp; the modifier is scoped to a real button
+ * tag so the accent CTA on every other screen is unaffected. */
+.auth-cta-danger {
+	background: var(--danger, #c0362c);
+	color: #ffffff;
+}
+
+.auth-cta-danger:hover:not(:disabled),
+.auth-cta-danger:focus-visible:not(:disabled) {
+	background: var(--danger-strong, #a82a22);
+}
+
+.delete-confirm-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-3);
+	margin-top: var(--space-4);
+}
+
 .notes-shell {
 	min-height: 100dvh;
 	display: flex;
@@ -381,6 +402,20 @@ body {
 .note-editor-archive {
 	align-self: flex-start;
 	color: var(--text-muted);
+}
+
+/* Hard-delete trigger in the editor footer. Subdued by default to
+ * keep archive (the recoverable action) as the visual default; the
+ * actual destructive emphasis lives on the confirmation dialog's CTA
+ * (.auth-cta-danger). */
+.note-editor-delete {
+	align-self: flex-start;
+	color: var(--text-muted);
+}
+
+.note-editor-delete:hover,
+.note-editor-delete:focus-visible {
+	color: var(--danger, #c0362c);
 }
 
 .note-editor-foot {

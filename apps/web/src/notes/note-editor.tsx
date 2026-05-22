@@ -4,6 +4,8 @@ import type { Note } from "@opfs/storage";
 import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState } from "react";
 
+import { useModalDialog } from "../share/use-modal-dialog";
+
 /**
  * Draft input local to the editor. `id` carries through on update;
  * absence means "new note", which the Repo turns into a fresh id.
@@ -25,6 +27,15 @@ export type NoteEditorProps = {
 	readonly onSave: (draft: Draft) => Promise<void>;
 	readonly onArchive?: (id: string) => Promise<void>;
 	/**
+	 * Hard-delete affordance. Distinct from `onArchive`: archive is
+	 * recoverable, this one wipes the row entirely. The editor opens a
+	 * confirmation dialog before invoking the handler — the prop is
+	 * the post-confirmation action, not the user-facing button click.
+	 * Wired through the store's `delete` action (not `repo.deleteNote`
+	 * directly) so the optimistic reload + tx-applied wiring fires.
+	 */
+	readonly onDelete?: (id: string) => Promise<void>;
+	/**
 	 * Optional share affordance. Receives the *current* draft so the
 	 * recipient sees what's on screen, not the stale persisted note —
 	 * codex pointed out that capturing the parent's `selection.note`
@@ -39,12 +50,14 @@ export function NoteEditor({
 	onCancel,
 	onSave,
 	onArchive,
+	onDelete,
 	onShare,
 }: NoteEditorProps) {
 	const t = useTranslations("notes");
 	const [draft, setDraft] = useState<Draft>(fromNote(note));
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	// A ref guards against double-submission within the same tick;
 	// React's `setBusy(true)` only disables the button on the next
 	// render, so the second click of a rapid pair would otherwise
@@ -80,6 +93,16 @@ export function NoteEditor({
 	const handleArchive = () => {
 		if (!note || !onArchive) return Promise.resolve();
 		return runGuarded(() => onArchive(note.id));
+	};
+	const handleConfirmDelete = () => {
+		if (!note || !onDelete) return Promise.resolve();
+		return runGuarded(async () => {
+			await onDelete(note.id);
+			// The parent closes the editor via its `onSave`/`onArchive`
+			// flow; mirror that here so the confirmation overlay tears
+			// down even if the parent decides to keep the editor open.
+			setConfirmingDelete(false);
+		});
 	};
 
 	return (
@@ -145,7 +168,76 @@ export function NoteEditor({
 						{t("editor.archive")}
 					</button>
 				) : null}
+				{note && onDelete ? (
+					<button
+						className="auth-link note-editor-delete"
+						disabled={busy}
+						onClick={() => setConfirmingDelete(true)}
+						type="button"
+					>
+						{t("editor.delete")}
+					</button>
+				) : null}
 			</div>
+			{confirmingDelete && note && onDelete ? (
+				<DeleteConfirmDialog
+					busy={busy}
+					onCancel={() => setConfirmingDelete(false)}
+					onConfirm={handleConfirmDelete}
+				/>
+			) : null}
 		</section>
+	);
+}
+
+/**
+ * Confirmation dialog for the irreversible hard-delete action.
+ * Wrapped in a `<dialog>` so the browser handles focus-trap +
+ * Esc-to-cancel (see `useModalDialog`). Mandatory per the project
+ * brief — no `window.confirm` is allowed since native popups can't
+ * be themed and don't carry our i18n strings.
+ */
+function DeleteConfirmDialog({
+	busy,
+	onCancel,
+	onConfirm,
+}: {
+	readonly busy: boolean;
+	readonly onCancel: () => void;
+	readonly onConfirm: () => void;
+}) {
+	const t = useTranslations("notes.deleteDialog");
+	const ref = useModalDialog(onCancel);
+	return (
+		<dialog
+			aria-label={t("region")}
+			className="share-dialog delete-confirm-dialog"
+			ref={ref}
+		>
+			<header className="share-dialog-header">
+				<h2>{t("title")}</h2>
+			</header>
+			<div className="share-dialog-body">
+				<p className="share-blurb">{t("blurb")}</p>
+				<div className="delete-confirm-actions">
+					<button
+						className="auth-link"
+						disabled={busy}
+						onClick={onCancel}
+						type="button"
+					>
+						{t("cancel")}
+					</button>
+					<button
+						className="auth-cta auth-cta-compact auth-cta-danger"
+						disabled={busy}
+						onClick={onConfirm}
+						type="button"
+					>
+						{t("confirm")}
+					</button>
+				</div>
+			</div>
+		</dialog>
 	);
 }

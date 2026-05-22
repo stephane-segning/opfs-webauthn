@@ -38,6 +38,13 @@ ON CONFLICT(id) DO UPDATE SET
 
 const ARCHIVE_SQL = "UPDATE notes SET archived = 1 WHERE id = ?";
 
+// Hard delete — the row is gone, no tombstone. Archive is the
+// recoverable path; this one is irreversible by design (PRD §Notes:
+// "Create, read, update, delete notes"). The dispatcher still
+// fans out `tx-applied` with the id so connected tabs drop it from
+// their cached list on the next reload.
+const DELETE_SQL = "DELETE FROM notes WHERE id = ?";
+
 const SELECT_BY_ID_SQL = `
 SELECT ${SELECT_NOTE_COLS}
 FROM notes
@@ -142,6 +149,18 @@ LIMIT ?`;
 
 	archive(id: string): void {
 		this.#db.exec(ARCHIVE_SQL, [decodeRowId(id)]);
+	}
+
+	/**
+	 * Hard-delete a note. Irreversible — the row is removed entirely
+	 * rather than flipping the `archived` flag. A `DELETE` against a
+	 * non-existent id is a silent no-op at the SQL layer; we don't
+	 * surface "row missing" because the page-side flow can't tell the
+	 * difference between "already deleted by another tab" and "never
+	 * existed", and either outcome is the same from the user's POV.
+	 */
+	delete(id: string): void {
+		this.#db.exec(DELETE_SQL, [decodeRowId(id)]);
 	}
 
 	/**

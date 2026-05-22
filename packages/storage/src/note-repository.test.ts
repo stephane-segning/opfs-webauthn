@@ -117,6 +117,19 @@ describe("NoteRepositorySql.archive", () => {
 	});
 });
 
+describe("NoteRepositorySql.delete", () => {
+	it("binds the decoded id and runs the hard-delete DELETE", () => {
+		const fake = new FakeDatabase();
+		const repo = new NoteRepositorySql(fake);
+		const id = generateRowId();
+		repo.delete(id);
+		const captured = fake.execs[0];
+		if (!captured) throw new Error("missing exec");
+		expect(captured.sql).toMatch(/DELETE FROM notes WHERE id = \?/);
+		expect(captured.bind[0]).toBeInstanceOf(Uint8Array);
+	});
+});
+
 describe("NoteRepositorySql.list", () => {
 	it("clamps the limit and selects newest-first", () => {
 		const fake = new FakeDatabase();
