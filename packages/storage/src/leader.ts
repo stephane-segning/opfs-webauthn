@@ -156,11 +156,16 @@ export type WriterFactory = () => WorkerLike;
  * fake; production binds to the real `LockManager`. Typed against
  * the spec's behaviour: `request(name, { mode }, callback)` and the
  * callback's promise is held for the lifetime of the lock.
+ *
+ * The optional `signal` mirrors the Web Locks spec — passing an
+ * `AbortSignal` lets the caller cancel a queued request that hasn't
+ * been granted yet. Used by `close()` to bail out of a restart-after-
+ * crash lock re-request if teardown races the new election.
  */
 export interface LockManagerLike {
 	request<T>(
 		name: string,
-		options: { mode: "exclusive" },
+		options: { mode: "exclusive"; signal?: AbortSignal },
 		callback: () => Promise<T>,
 	): Promise<T>;
 }
@@ -907,13 +912,25 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 		for (const l of errorListeners) l(event);
 		// Drop leadership: releases the Web Lock so a queued peer is
 		// promoted, disposes the writer + bridges. Clears
-		// `currentLeaderId` so the new leader's announce drives a fresh
-		// `pairWithLeader` on this tab.
-		giveUpLeadership();
+		// `currentLeaderId` so the new leader's announce (either ours
+		// after restart, or a peer's) drives a fresh `pairWithLeader`
+		// on this tab.
+		giveUpLeadership("writer-error");
 		currentLeaderId = null;
+		// Round 3: re-request the lock so a single-tab session recovers
+		// automatically. In multi-tab sessions another peer queued on
+		// `opfs-db-writer` may be granted first — that's fine, we'll
+		// pair with it via the normal `leader-elected` discovery path.
+		// Bounded by a sliding-window restart budget; once exceeded, we
+		// emit a transport-level error and stop trying so `createRepo`
+		// can degrade to the next tier instead of looping forever on a
+		// boot-time crash.
+		restartLockRequest();
 	};
 
-	const giveUpLeadership = (): void => {
+	const giveUpLeadership = (
+		_cause: "close" | "writer-error" = "close",
+	): void => {
 		// Detach the writer-error listener before we close the writer
 		// so its own teardown can't fire a spurious error event back
 		// into the failure handler.
@@ -952,44 +969,111 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 		}
 	};
 
+	// Round 3: sliding-window restart budget. Each entry is the
+	// timestamp (ms) of a writer-failure we've observed. We purge
+	// entries older than the window on every check; if the surviving
+	// count reaches `MAX_FAILURES`, we stop restarting and emit a
+	// transport-level error so the caller can fall through to the
+	// dedicated-worker tier instead of looping forever on a writer
+	// that crashes on boot. `MAX_FAILURES` is the number of crashes
+	// before we give up entirely — N=3 means the 3rd consecutive crash
+	// in the window halts the restart loop (max 2 restarts → 3 writer
+	// generations total).
+	const RESTART_WINDOW_MS = 30_000;
+	const MAX_FAILURES = 3;
+	const failureTimestamps: number[] = [];
+	// AbortController for the current in-flight `locks.request`. We
+	// signal it from `close()` so a queued restart-after-crash can be
+	// cancelled without leaking a never-settled lock-callback promise.
+	let lockAbort: AbortController | null = null;
+
+	const requestLock = (): void => {
+		if (closed) return;
+		const controller =
+			typeof AbortController !== "undefined" ? new AbortController() : null;
+		lockAbort = controller;
+		const options: { mode: "exclusive"; signal?: AbortSignal } = {
+			mode: "exclusive",
+		};
+		if (controller) options.signal = controller.signal;
+		const p = deps.locks
+			.request(
+				LEADER_LOCK_NAME,
+				options,
+				() =>
+					new Promise<void>((release) => {
+						// If `close()` ran while we were still queued for the
+						// lock, the grant arrives on a torn-down transport.
+						// Release immediately so the next queued peer gets a
+						// turn instead of inheriting an orphaned lock.
+						if (closed) {
+							release();
+							return;
+						}
+						resolveLock = release;
+						becomeLeader();
+					}),
+			)
+			.catch((err: unknown) => {
+				// Lock acquisition failure (e.g. `SecurityError` in non-
+				// secure contexts, `InvalidStateError` on a detached
+				// document, or `AbortError` from our own `close()`).
+				// Without surfacing this, `whenReady` never settles and
+				// `createRepo` hangs forever.
+				if (closed) return; // teardown-initiated abort: stay quiet
+				const event = new Event("error");
+				for (const l of errorListeners) l(event);
+				failReady(
+					err instanceof Error
+						? err
+						: new Error(`leader lock request rejected: ${String(err)}`),
+				);
+			})
+			.finally(() => {
+				if (lockAbort === controller) lockAbort = null;
+			});
+		void p;
+	};
+
+	/**
+	 * Round 3: re-request the lock after a writer crash. Tracks restart
+	 * count in a sliding window so a pathological writer that crashes
+	 * on every boot can't put us into an infinite loop. After the cap
+	 * is reached we emit a transport `error` event — code that's only
+	 * watching error events (e.g. `createRepo` deciding whether to fall
+	 * through to the dedicated-worker tier) will see it.
+	 */
+	const restartLockRequest = (): void => {
+		if (closed) return;
+		const now = Date.now();
+		const cutoff = now - RESTART_WINDOW_MS;
+		while (failureTimestamps.length) {
+			const head = failureTimestamps[0];
+			if (head === undefined || head >= cutoff) break;
+			failureTimestamps.shift();
+		}
+		failureTimestamps.push(now);
+		if (failureTimestamps.length >= MAX_FAILURES) {
+			// Budget exhausted: this crash makes the Nth in-window
+			// failure. Stop restarting and tell the world. We don't
+			// `failReady` here because `whenReady` is already settled
+			// (the transport ran successfully at least once before
+			// crashing); the contract for ongoing failures is the
+			// `error` event.
+			const event = new Event("error");
+			for (const l of errorListeners) l(event);
+			return;
+		}
+		requestLock();
+	};
+
 	// Kick off the election. Web Locks queues callers FIFO; only one
 	// callback at a time holds the lock. The callback returns a
 	// promise we keep open so the lock survives until either the tab
 	// unloads (browser auto-releases) or `close()` resolves the
 	// promise explicitly — required so a `Repo.close()` while the
 	// page is still alive actually releases the lock to peer tabs.
-	const lockPromise = deps.locks
-		.request(
-			LEADER_LOCK_NAME,
-			{ mode: "exclusive" },
-			() =>
-				new Promise<void>((release) => {
-					// If `close()` ran while we were still queued for the
-					// lock, the grant arrives on a torn-down transport.
-					// Release immediately so the next queued peer gets a
-					// turn instead of inheriting an orphaned lock.
-					if (closed) {
-						release();
-						return;
-					}
-					resolveLock = release;
-					becomeLeader();
-				}),
-		)
-		.catch((err: unknown) => {
-			// Lock acquisition failure (e.g. `SecurityError` in non-
-			// secure contexts, `InvalidStateError` on a detached
-			// document). Without surfacing this, `whenReady` never
-			// settles and `createRepo` hangs forever.
-			const event = new Event("error");
-			for (const l of errorListeners) l(event);
-			failReady(
-				err instanceof Error
-					? err
-					: new Error(`leader lock request rejected: ${String(err)}`),
-			);
-		});
-	void lockPromise;
+	requestLock();
 
 	// If a leader is already in the field when this tab started, they
 	// announced before our discovery listener was attached. Browsers
@@ -1044,11 +1128,24 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 				// already closed
 			}
 			detachPair();
+			// Round 3: cancel any queued `locks.request` that hasn't
+			// been granted yet (typically the restart-after-crash path
+			// racing teardown). Aborting flushes the `.catch` below
+			// with an `AbortError`, but the `closed` guard inside the
+			// catch keeps it quiet — no spurious `error` event.
+			if (lockAbort) {
+				try {
+					lockAbort.abort();
+				} catch {
+					// best-effort: implementation may not support abort
+				}
+				lockAbort = null;
+			}
 			// `giveUpLeadership` releases the lock if we currently hold
 			// it (`resolveLock` is set inside the lock callback). Also
 			// release if we were still queued — the `.catch` above will
 			// fire and is a no-op for an already-settled `whenReady`.
-			giveUpLeadership();
+			giveUpLeadership("close");
 			if (resolveLock) {
 				const r = resolveLock;
 				resolveLock = null;

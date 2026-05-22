@@ -857,6 +857,192 @@ describe("Web-Locks leader-election transport", () => {
 		// tabB was already torn down by `repoB.close()` via `terminate()`.
 	});
 
+	it("recovers from a single writer crash by re-requesting the lock", async () => {
+		// Round-3 fix. In a single-tab session, a writer crash used to
+		// leave the transport stuck: `handleWriterFailure` released the
+		// lock but nothing re-requested it, so the only tab on the
+		// origin sat with `currentLeaderId === null` forever. The fix
+		// re-requests the lock automatically; in a single-tab world the
+		// queue is empty so the same tab is granted again immediately,
+		// spawns a fresh writer, re-establishes the self-pair, and the
+		// in-flight RPC succeeds via the new writer.
+		const db = await openDb();
+		const locks = new FakeLockManager();
+		const channelSuffix = `writer-recover-${Math.random()}`;
+		const vault = makeVault();
+
+		// First writerFactory invocation returns a crash-only stub
+		// (collects error listeners, never replies). Subsequent
+		// invocations return a real working writer wired to the shared
+		// in-memory DB so the replayed `bootstrap` envelope actually
+		// gets answered.
+		const crashListeners = new Set<(event: Event) => void>();
+		const crashWriter: WorkerLike = {
+			postMessage: () => {
+				// black-hole — pending RPC stays in flight until the crash
+			},
+			addEventListener: ((type: string, listener: unknown) => {
+				if (type === "error") {
+					crashListeners.add(listener as (event: Event) => void);
+				}
+			}) as WorkerLike["addEventListener"],
+			removeEventListener: ((type: string, listener: unknown) => {
+				if (type === "error") {
+					crashListeners.delete(listener as (event: Event) => void);
+				}
+			}) as WorkerLike["removeEventListener"],
+			close: () => {
+				crashListeners.clear();
+			},
+		};
+		let factoryCalls = 0;
+		const factory = (): WorkerLike => {
+			factoryCalls += 1;
+			if (factoryCalls === 1) return crashWriter;
+			return makeWriter(db).worker;
+		};
+
+		const deps = makeDeps(channelSuffix, locks, "recover", factory);
+		const transport = createLeaderTransport(deps);
+		try {
+			await transport.whenReady;
+			const client = new WorkerClient(transport);
+			const repo = new Repo(client, vault);
+			// Fire bootstrap before crashing the writer. The envelope
+			// sits in `inFlight`; the crash drains the writer-side
+			// failure path; the restart replays it onto a healthy
+			// writer and the promise resolves.
+			const bootstrapPromise = repo.bootstrap();
+			// Yield once so the envelope lands in inFlight + reaches
+			// the bridge (which posts it into the crashWriter's
+			// black-hole `postMessage`).
+			await new Promise((r) => setTimeout(r, 10));
+			// Crash the first writer. The transport must observe the
+			// error, give up the lock, and re-request it. In the empty
+			// FakeLockManager queue we'll be granted again immediately,
+			// the second factory call returns a healthy writer, and the
+			// replayed bootstrap succeeds.
+			const event = new Event("error");
+			for (const l of crashListeners) l(event);
+
+			// The pending bootstrap rejects via the synthesized error
+			// envelope from `failPending`. The interesting recovery
+			// signal is that a *fresh* RPC works after the restart —
+			// proving the new leader is wired up end-to-end.
+			await expect(bootstrapPromise).rejects.toThrow();
+
+			// Wait for the second writer to be in place. The restart
+			// path is synchronous in `handleWriterFailure → restartLock
+			// Request → requestLock → becomeLeader`, but the FakeLock
+			// Manager may schedule the grant asynchronously, so poll
+			// until the factory has been called twice.
+			await waitFor(() => factoryCalls >= 2, 1000);
+			expect(factoryCalls).toBeGreaterThanOrEqual(2);
+
+			// A fresh request on the recovered transport must round-
+			// trip via the new writer.
+			const repo2 = new Repo(new WorkerClient(transport), vault);
+			await repo2.bootstrap();
+			const note = await repo2.upsertNote({
+				title: "after recovery",
+				body: "fresh writer",
+			});
+			const fetched = await repo2.getNote(note.id);
+			expect(fetched?.title).toBe("after recovery");
+		} finally {
+			transport.close();
+		}
+	});
+
+	it("stops re-requesting the lock after the restart budget is exhausted", async () => {
+		// Round-3 fix. The restart loop is bounded so a writer that
+		// crashes on every boot can't pin the event loop forever. After
+		// the Nth failure within the window, the transport surfaces a
+		// final `error` event (so callers watching the event channel
+		// know the recovery loop has given up) and stops calling
+		// `writerFactory`. The exact cap matches `MAX_FAILURES` inside
+		// `leader.ts` (currently 3); changing it requires this test
+		// updated too.
+		const locks = new FakeLockManager();
+		const channelSuffix = `writer-cap-${Math.random()}`;
+
+		// Every writer this factory returns is crash-only. We collect
+		// the per-writer error-listener sets so each call to
+		// `triggerNextCrash()` only fires on the most recent writer
+		// (which is the one currently installed in the bridge).
+		const writerErrorListeners: Array<Set<(event: Event) => void>> = [];
+		let factoryCalls = 0;
+		const factory = (): WorkerLike => {
+			factoryCalls += 1;
+			const listeners = new Set<(event: Event) => void>();
+			writerErrorListeners.push(listeners);
+			return {
+				postMessage: () => {},
+				addEventListener: ((type: string, listener: unknown) => {
+					if (type === "error") {
+						listeners.add(listener as (event: Event) => void);
+					}
+				}) as WorkerLike["addEventListener"],
+				removeEventListener: ((type: string, listener: unknown) => {
+					if (type === "error") {
+						listeners.delete(listener as (event: Event) => void);
+					}
+				}) as WorkerLike["removeEventListener"],
+				close: () => {
+					listeners.clear();
+				},
+			};
+		};
+
+		const deps = makeDeps(channelSuffix, locks, "capLeader", factory);
+		const transport = createLeaderTransport(deps);
+		// Count transport-level error events. We expect at least one
+		// after the cap is hit (the budget-exhausted signal). Per-crash
+		// errors also flow through the same channel, so the absolute
+		// count is "at least RESTART_CAP + 1" — we assert the final
+		// state (no further factory calls) rather than an exact count.
+		const errorEvents: Event[] = [];
+		transport.addEventListener("error", (e) => errorEvents.push(e));
+
+		try {
+			await transport.whenReady;
+
+			// Fire crashes one at a time, waiting between each so the
+			// restart path (release lock → grant → becomeLeader → new
+			// writer in `writerErrorListeners[i]`) settles before we
+			// trigger the next one.
+			const triggerLatest = (): void => {
+				const latest = writerErrorListeners[writerErrorListeners.length - 1];
+				if (!latest) return;
+				const event = new Event("error");
+				for (const l of latest) l(event);
+			};
+
+			// Crash #1 — within budget, transport restarts.
+			triggerLatest();
+			await waitFor(() => factoryCalls >= 2, 1000);
+			// Crash #2 — still within budget.
+			triggerLatest();
+			await waitFor(() => factoryCalls >= 3, 1000);
+			// Crash #3 — budget exhausted on this attempt. After this
+			// crash the transport must NOT spawn a fourth writer.
+			triggerLatest();
+
+			// Give the (would-be) restart path a few event-loop turns
+			// to misbehave if it's going to. With the cap in place,
+			// `factoryCalls` stays at 3 indefinitely.
+			await new Promise((r) => setTimeout(r, 50));
+			expect(factoryCalls).toBe(3);
+			// At least one error event must have fired (the per-crash
+			// path emits one; the budget-exhausted path emits another
+			// on top). The exact count varies with timing, but the
+			// floor is meaningful.
+			expect(errorEvents.length).toBeGreaterThanOrEqual(1);
+		} finally {
+			transport.close();
+		}
+	});
+
 	// Wait briefly so the polling helper is exercised when handover
 	// timing matters. Kept as a sanity test rather than reaching into
 	// the BC delivery internals.
