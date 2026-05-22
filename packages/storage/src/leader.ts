@@ -108,11 +108,31 @@ type PairAck = {
  * next handover.
  */
 type LeaderQuery = { readonly kind: "leader-query" };
+/**
+ * Leader's "writer crashed, give up on me" signal. Sent when the
+ * dedicated writer worker fires an `error` event (script load failure,
+ * uncaught exception in the worker scope, etc.). Clients drop their
+ * pair channel and wait for the next `leader-elected` — the failing
+ * tab also releases the Web Lock so a queued peer can take over.
+ *
+ * The leader still posts synthetic error envelopes on each per-pair
+ * BC before broadcasting this, so in-flight RPCs reject promptly via
+ * the normal `kind: "error"` envelope path. `leader-failed` is the
+ * channel-level signal for "drop your pair channel, the leader is
+ * gone" — the per-pair error envelopes drain the pending request
+ * queue.
+ */
+type LeaderFailed = {
+	readonly kind: "leader-failed";
+	readonly leaderId: string;
+	readonly message: string;
+};
 export type LeaderMessage =
 	| LeaderAnnouncement
 	| PairRequest
 	| PairAck
-	| LeaderQuery;
+	| LeaderQuery
+	| LeaderFailed;
 
 /**
  * Time the client waits for a `pair-ack` before re-sending its
@@ -239,12 +259,23 @@ function bcToWorkerLike(channel: BroadcastChannel): WorkerLike {
  * Echo-suppression: `BroadcastChannel` does NOT redeliver a sender's
  * own messages back to it, so the bridge can forward writer output
  * onto the pair BC without seeing it bounce back as a client request.
+ *
+ * Client-close interception (fix #3): in leader mode every paired tab
+ * shares ONE writer connection. If a follower's `Repo.close()` were
+ * forwarded as `{kind: "close"}` to the writer, the writer-side
+ * `Connection.dispose()` would tear down the shared `self` port,
+ * killing the writer for every other paired tab. The bridge instead
+ * intercepts close envelopes per-client: it synthesizes the response
+ * locally, fires `onClientClose` so the transport can drop the
+ * bridge from its registry, and disposes itself. The writer stays up
+ * — its lifecycle is owned by `giveUpLeadership()` on the leader tab.
  */
 class LeaderBridge {
 	readonly #channel: BroadcastChannel;
 	readonly #writer: WorkerLike;
 	readonly #idMap: Map<number, number>;
 	readonly #allocate: () => number;
+	readonly #onClientClose: () => void;
 	#disposed = false;
 
 	constructor(
@@ -252,20 +283,56 @@ class LeaderBridge {
 		writer: WorkerLike,
 		idMap: Map<number, number>,
 		allocate: () => number,
+		onClientClose: () => void = () => {},
 	) {
 		this.#channel = channel;
 		this.#writer = writer;
 		this.#idMap = idMap;
 		this.#allocate = allocate;
+		this.#onClientClose = onClientClose;
 		channel.addEventListener("message", this.#onClientMessage);
 		writer.addEventListener("message", this.#onWriterMessage);
 	}
 
 	#onClientMessage = (event: MessageEvent): void => {
 		if (this.#disposed) return;
-		const data = event.data as { id?: unknown; request?: unknown };
+		const data = event.data as {
+			id?: unknown;
+			request?: { kind?: unknown } | unknown;
+		};
 		if (typeof data?.id !== "number") {
 			this.#writer.postMessage(event.data);
+			return;
+		}
+		// Fix #3: intercept `close` from clients. Forwarding it would
+		// dispose the shared writer-side `Connection` and break every
+		// other paired tab. Synthesize the response, signal the leader
+		// transport via `onClientClose`, and tear down only this bridge.
+		const request = (data as { request?: { kind?: unknown } }).request;
+		if (
+			request &&
+			typeof request === "object" &&
+			(request as { kind?: unknown }).kind === "close"
+		) {
+			const clientId = data.id;
+			try {
+				this.#channel.postMessage({
+					kind: "response",
+					id: clientId,
+					response: { kind: "close" },
+				});
+			} catch {
+				// BC may already be torn down — the client called close
+				// and the response is best-effort anyway.
+			}
+			const cb = this.#onClientClose;
+			this.dispose();
+			try {
+				cb();
+			} catch {
+				// caller-supplied callback; we own bridge state, so a
+				// throw upward shouldn't leak into the dispose path
+			}
 			return;
 		}
 		const clientId = data.id;
@@ -284,6 +351,33 @@ class LeaderBridge {
 		this.#idMap.delete(leaderId);
 		this.#channel.postMessage({ ...data, id: clientId });
 	};
+
+	/**
+	 * Reject every in-flight client request mapped through this bridge
+	 * by posting a synthetic `{kind: "error"}` envelope per pending id
+	 * on the per-pair channel. The client's `WorkerClient` treats the
+	 * envelope identically to a writer-side error, so pending promises
+	 * (`bootstrap`, `upsertNote`, etc.) reject promptly instead of
+	 * stranding. Used by the transport when the writer fires its
+	 * `"error"` event (fix #1). The bridge stays usable after this
+	 * call only to support test-time inspection — production callers
+	 * always `dispose()` immediately after.
+	 */
+	failPending(message: string): void {
+		if (this.#disposed) return;
+		for (const clientId of this.#idMap.values()) {
+			try {
+				this.#channel.postMessage({
+					kind: "error",
+					id: clientId,
+					message,
+				});
+			} catch {
+				// per-pair BC may already be detached; best-effort
+			}
+		}
+		this.#idMap.clear();
+	}
 
 	dispose(): void {
 		if (this.#disposed) return;
@@ -417,6 +511,13 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 	// which client issued the original request.
 	let nextLeaderEnvelopeId = 1;
 	const allocateLeaderId = (): number => nextLeaderEnvelopeId++;
+	/**
+	 * Set by `becomeLeader` to a closure that removes the writer's
+	 * `error` listener. Cleared by `giveUpLeadership`. Hoisted into the
+	 * transport scope so the leader-failure handler and the orderly
+	 * `close()` path share the same cleanup.
+	 */
+	let pendingWriterErrorCleanup: (() => void) | null = null;
 
 	// Web-Locks lifecycle plumbing. `resolveLock` settles the never-
 	// resolving promise we return from the lock callback — calling it
@@ -485,7 +586,13 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 	};
 
 	/**
-	 * Wire the pair channel locally and replay any buffered envelopes.
+	 * Wire the pair channel locally. Does NOT replay buffered envelopes
+	 * — BC delivers only to currently-subscribed peers and has no queue,
+	 * so a replay here would race the leader-side subscribe. The replay
+	 * is gated on `pair-ack` (or, for the leader's self-pair, executed
+	 * synchronously in `becomeLeader` since both ends are subscribed by
+	 * construction). Fix #2.
+	 *
 	 * Does NOT mark ready — readiness for non-leader tabs is gated on
 	 * the `pair-ack` (BC delivery is async, so the leader hasn't
 	 * necessarily subscribed by the time we'd otherwise resolve).
@@ -495,11 +602,19 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 		detachPair();
 		pairChannel = channel;
 		channel.addEventListener("message", onPairMessage);
-		// Replay anything that was waiting on the previous (now-dead)
-		// pair. The leader has no memory of these ids, so the request
-		// reruns server-side; the response carries the same id so the
-		// page-side `WorkerClient` resolves the original Promise.
-		// ADR 0006: in-flight requests are retried once with the same id.
+	};
+
+	/**
+	 * Re-post every in-flight envelope onto the supplied (already
+	 * subscribed) BroadcastChannel. The leader has no memory of these
+	 * ids, so the request reruns server-side; the response carries the
+	 * same id so the page-side `WorkerClient` resolves the original
+	 * promise. ADR 0006: in-flight requests are retried once with the
+	 * same id. Fix #2: caller is responsible for sequencing — only
+	 * invoke after the leader-side bridge is known to be listening
+	 * (i.e. on `pair-ack` or on synchronous self-pair construction).
+	 */
+	const replayInFlight = (channel: BroadcastChannel): void => {
 		for (const pending of inFlight.values()) {
 			channel.postMessage(pending.data);
 		}
@@ -580,13 +695,22 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 			const existing = bridges.get(msg.clientId);
 			if (existing) existing.dispose();
 			const channel = deps.newBroadcastChannel(msg.channel);
+			const incomingClientId = msg.clientId;
 			const bridge = new LeaderBridge(
 				channel,
 				writer,
 				new Map<number, number>(),
 				allocateLeaderId,
+				() => {
+					// Fix #3: bridge intercepted a client `close` and is
+					// removing itself. Drop the entry from our registry
+					// so a later `pair-request` from the same clientId
+					// (re-pairing tab) doesn't trip the "dispose existing"
+					// branch on a stale handle.
+					bridges.delete(incomingClientId);
+				},
 			);
-			bridges.set(msg.clientId, bridge);
+			bridges.set(incomingClientId, bridge);
 			// Now that the leader has subscribed to the per-pair BC,
 			// ack the client so it can resolve `whenReady` and start
 			// pushing RPC envelopes. Without this, BC delivery latency
@@ -608,7 +732,33 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 			if (msg.clientId !== clientId) return;
 			if (!pendingPair || pendingPair.leaderId !== msg.leaderId) return;
 			clearPendingPair();
+			// Fix #2: the ack is our proof that the leader's bridge has
+			// subscribed to the per-pair BC. Now — and only now — is it
+			// safe to replay any in-flight envelopes that accumulated
+			// while we were waiting for the handshake. Replaying earlier
+			// (inside `attachPair`) would have raced BC subscribe order
+			// and silently dropped the buffered RPCs.
+			if (pairChannel) replayInFlight(pairChannel);
 			markReady();
+			return;
+		}
+		if (msg.kind === "leader-failed") {
+			// The current leader's writer crashed. Drop our pair channel
+			// — the leader is about to release its Web Lock and a queued
+			// peer will be promoted shortly. Pending RPCs already saw
+			// per-pair error envelopes (synthesized by the dying leader's
+			// bridge) so `WorkerClient` has rejected them; what remains
+			// is to clear our local pair state so the next
+			// `leader-elected` triggers a fresh `pairWithLeader`.
+			if (msg.leaderId !== currentLeaderId) return;
+			detachPair();
+			currentLeaderId = null;
+			clearPendingPair();
+			// Surface the failure to the transport's error listeners so
+			// any code path that only watches `error` events (rather
+			// than per-request rejections) also notices.
+			const event = new Event("error");
+			for (const l of errorListeners) l(event);
 			return;
 		}
 		if (msg.kind === "leader-query") {
@@ -633,6 +783,19 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 		leaderId = deps.newLeaderId();
 		writer = deps.writerFactory();
 
+		// Fix #1: a writer that fails to load or crashes mid-session
+		// only emits `"error"`, never `"message"`, so the bridges'
+		// message listeners never fire and outstanding RPCs (like the
+		// `bootstrap` `createRepo` is awaiting) stay pending forever.
+		// Install one error listener on the writer at the leader level,
+		// fan out synthetic error envelopes per bridge, and tear the
+		// leader down so a queued peer takes over.
+		const myLeaderId = leaderId;
+		const onWriterError = (_event: Event): void => {
+			handleWriterFailure(myLeaderId, "storage writer error");
+		};
+		writer.addEventListener("error", onWriterError);
+
 		// The leader is also a client of its own writer. We use a
 		// dedicated per-pair BC (named after `clientId`) so the same
 		// `LeaderBridge` code path serves both same-tab and cross-tab
@@ -652,6 +815,13 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 			writer,
 			new Map<number, number>(),
 			allocateLeaderId,
+			() => {
+				// Self-bridge close: only meaningful if the leader's own
+				// page-side `Repo.close()` ran before the transport's
+				// teardown. Drop the bridge from the registry; the
+				// transport-level `close()` releases the writer + lock.
+				bridges.delete(clientId);
+			},
 		);
 		bridges.set(clientId, bridge);
 		// Pretend the announcement happened for `currentLeaderId`
@@ -661,6 +831,11 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 		// to wait for a `pair-ack` — both ends are subscribed already.
 		currentLeaderId = leaderId;
 		attachPair(clientSide);
+		// Fix #2: replay-on-pair-ack is for cross-tab clients. The
+		// leader's self-pair is synchronous (we just built both ends
+		// above), so any envelopes that landed in `inFlight` while we
+		// were waiting for the Web Lock can be flushed immediately.
+		replayInFlight(clientSide);
 		markReady();
 
 		// Announce to peers so any tab that started before us can pair.
@@ -673,9 +848,84 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 			id: leaderId,
 		};
 		discovery.postMessage(announce);
+		// Cleanup hook used by `giveUpLeadership` to detach the error
+		// listener on orderly shutdown. Kept as a side-effect of
+		// `becomeLeader` so the listener registration and removal sit
+		// next to each other in the source.
+		pendingWriterErrorCleanup = (): void => {
+			try {
+				writer?.removeEventListener("error", onWriterError);
+			} catch {
+				// best-effort: writer may already be torn down
+			}
+		};
+	};
+
+	/**
+	 * Fix #1: the dedicated writer worker has emitted `"error"`. We
+	 * tear down all bridges (fabricating per-pair error envelopes so
+	 * each client's `WorkerClient` rejects its in-flight RPCs), tell
+	 * peers via `leader-failed` to drop their pair channels and wait
+	 * for the next election, and release leadership so the Web Lock
+	 * frees up for the next queued tab.
+	 *
+	 * Guarded by the `expectedLeaderId` snapshot so a stale error
+	 * delivered after we already handed leadership off doesn't
+	 * collaterally damage a fresh leader instance.
+	 */
+	const handleWriterFailure = (
+		expectedLeaderId: string,
+		message: string,
+	): void => {
+		if (closed) return;
+		if (leaderId !== expectedLeaderId) return;
+		const failingId = leaderId;
+		for (const bridge of bridges.values()) {
+			try {
+				bridge.failPending(message);
+			} catch {
+				// best-effort: a thrown bridge shouldn't block the rest
+			}
+		}
+		// Tell peers to drop their pair channels — the error envelopes
+		// above drain pending RPCs, this drains pair state. Without
+		// this, late-arriving requests would post into a per-pair BC
+		// the leader is about to stop listening on.
+		try {
+			discovery.postMessage({
+				kind: "leader-failed",
+				leaderId: failingId,
+				message,
+			});
+		} catch {
+			// discovery may already be closed in a teardown race
+		}
+		// Surface to the leader tab's own transport listeners so the
+		// leader-side `WorkerClient` (subscribed via the self-pair) sees
+		// an error event in addition to the per-pair error envelopes.
+		const event = new Event("error");
+		for (const l of errorListeners) l(event);
+		// Drop leadership: releases the Web Lock so a queued peer is
+		// promoted, disposes the writer + bridges. Clears
+		// `currentLeaderId` so the new leader's announce drives a fresh
+		// `pairWithLeader` on this tab.
+		giveUpLeadership();
+		currentLeaderId = null;
 	};
 
 	const giveUpLeadership = (): void => {
+		// Detach the writer-error listener before we close the writer
+		// so its own teardown can't fire a spurious error event back
+		// into the failure handler.
+		if (pendingWriterErrorCleanup) {
+			const cleanup = pendingWriterErrorCleanup;
+			pendingWriterErrorCleanup = null;
+			try {
+				cleanup();
+			} catch {
+				// best-effort
+			}
+		}
 		for (const bridge of bridges.values()) bridge.dispose();
 		bridges.clear();
 		if (writer) {

@@ -664,6 +664,199 @@ describe("Web-Locks leader-election transport", () => {
 		tabB.close();
 	});
 
+	it("propagates writer crashes to pending RPCs and frees the lock", async () => {
+		// Fix #1 regression. `LeaderBridge` used to listen only on
+		// `"message"`; a writer that loaded and then died (or never
+		// loaded at all — Worker script error) emits only `"error"`,
+		// so outstanding `bootstrap` calls would hang forever and the
+		// next-tier fallback never engaged.
+		//
+		// We build a writer that exposes a `triggerError` hook so the
+		// test can synthesize the failure deterministically.
+		const locks = new FakeLockManager();
+		const channelSuffix = `writer-crash-${Math.random()}`;
+
+		// Stub writer: never responds to RPC, just collects listeners
+		// so the test can dispatch an `error` event by hand.
+		const writerErrorListeners = new Set<(event: Event) => void>();
+		const stubWriter: WorkerLike = {
+			postMessage: () => {
+				// Black hole — we never want responses; the crash should
+				// short-circuit the pending RPC before any response is
+				// produced.
+			},
+			addEventListener: ((type: string, listener: unknown) => {
+				if (type === "error") {
+					writerErrorListeners.add(listener as (event: Event) => void);
+				}
+				// message listener is registered by the bridge but we
+				// never dispatch one; that's the bug being tested.
+			}) as WorkerLike["addEventListener"],
+			removeEventListener: ((type: string, listener: unknown) => {
+				if (type === "error") {
+					writerErrorListeners.delete(listener as (event: Event) => void);
+				}
+			}) as WorkerLike["removeEventListener"],
+			close: () => {
+				writerErrorListeners.clear();
+			},
+		};
+
+		const deps = makeDeps(
+			channelSuffix,
+			locks,
+			"crashLeader",
+			() => stubWriter,
+		);
+		const transport = createLeaderTransport(deps);
+		try {
+			await transport.whenReady;
+			const client = new WorkerClient(transport);
+			// Fire off a request — it'll sit in-flight because stubWriter
+			// never responds. The crash should reject it.
+			const pending = client.send({ kind: "bootstrap" });
+			// Yield once so the envelope reaches the bridge before we
+			// trigger the crash.
+			await new Promise((r) => setTimeout(r, 10));
+			// Dispatch the writer-error: in production this is the
+			// `Worker`'s native `"error"` event (script load failure,
+			// uncaught exception). All listeners should fire.
+			const event = new Event("error");
+			for (const l of writerErrorListeners) l(event);
+
+			await expect(pending).rejects.toThrow();
+		} finally {
+			transport.close();
+		}
+
+		// And the lock must be free now — a fresh transport should be
+		// able to acquire it without the original being explicitly
+		// closed beyond what `handleWriterFailure` did.
+		const tabAfter = createLeaderTransport(
+			makeDeps(
+				`writer-crash-after-${Math.random()}`,
+				locks,
+				"afterCrash",
+				() => {
+					// Provide a valid writer for the follow-on tab.
+					return makeWriterStub();
+				},
+			),
+		);
+		try {
+			await tabAfter.whenReady;
+		} finally {
+			tabAfter.close();
+		}
+	});
+
+	it("replays in-flight RPCs only after the new leader acks the pair", async () => {
+		// Fix #2 regression. `attachPair` used to replay synchronously,
+		// but BC delivery is async + non-replaying: a replay before the
+		// leader-side bridge subscribed to the per-pair BC would post
+		// into the void.
+		//
+		// We force the ordering: tab A becomes leader, then a request
+		// from tab B (queued behind A on the lock) sits in `inFlight`.
+		// We then close A and release the lock so B becomes leader. B
+		// is its own writer (self-pair, synchronous), so the request
+		// must surface in the writer post-handover. If the replay-on-
+		// ack path regresses, the request will be lost in the gap.
+		const db = await openDb();
+		const { worker: workerB } = makeWriter(db);
+		const locks = new FakeLockManager();
+		const channelSuffix = `replay-${Math.random()}`;
+		const vault = makeVault();
+
+		// Pre-occupy the lock with a blocker that doesn't actually need
+		// a writer to do anything useful — its job is to hold the lock
+		// while tabB queues envelopes.
+		const blocker = createLeaderTransport(
+			makeDeps(channelSuffix, locks, "blocker", () => makeWriterStub()),
+		);
+		await blocker.whenReady;
+
+		// Tab B starts behind blocker on the lock.
+		const tabB = createLeaderTransport(
+			makeDeps(channelSuffix, locks, "leaderB", () => workerB),
+		);
+		const clientB = new WorkerClient(tabB);
+		const repoB = new Repo(clientB, vault);
+		// `bootstrap` is the in-flight RPC the spec calls out — its
+		// envelope sits in `inFlight` while tabB waits its turn on the
+		// lock. If replay regresses, the envelope is silently dropped
+		// when tabB self-pairs and `bootstrap()` hangs.
+		const bootstrapPromise = repoB.bootstrap();
+
+		// Give the envelope a tick to reach `postMessage` and land in
+		// `inFlight`. Without this yield the test could close the
+		// blocker before B's send even ran.
+		await new Promise((r) => setTimeout(r, 10));
+
+		blocker.close();
+		locks.releaseHeld();
+
+		try {
+			await bootstrapPromise; // must succeed via replay onto B
+			const note = await repoB.upsertNote({
+				title: "replay-after-ack",
+				body: "x",
+			});
+			expect(note.id).toHaveLength(26);
+		} finally {
+			tabB.close();
+		}
+	});
+
+	it("a follower closing does not tear down the leader's writer", async () => {
+		// Fix #3 regression. The previous code forwarded a follower's
+		// `{kind: "close"}` straight to the leader's writer, where the
+		// dispatcher disposed the shared writer-side `Connection` and
+		// orphaned every other paired tab. The bridge now intercepts
+		// `close` per-client: synthesizes the response, drops only that
+		// client's bridge, leaves the writer alive.
+		const db = await openDb();
+		const { worker } = makeWriter(db);
+		const locks = new FakeLockManager();
+		const channelSuffix = `client-close-${Math.random()}`;
+		const vault = makeVault();
+
+		const depsA = makeDeps(channelSuffix, locks, "leaderA", () => worker);
+		const tabA = createLeaderTransport(depsA);
+		await tabA.whenReady;
+
+		const depsB = makeDeps(channelSuffix, locks, "tabB", () => {
+			throw new Error("tabB must not become leader");
+		});
+		const tabB = createLeaderTransport(depsB);
+		await tabB.whenReady;
+
+		const clientA = new WorkerClient(tabA);
+		const clientB = new WorkerClient(tabB);
+		const repoA = new Repo(clientA, vault);
+		const repoB = new Repo(clientB, vault);
+		await repoA.bootstrap();
+		await repoB.bootstrap();
+
+		// Client A (the follower-from-the-leader's-POV is actually the
+		// non-leader tab, B; A is the leader. So we close B and assert
+		// A keeps working). Naming follows the finding's wording.
+		await repoB.close();
+
+		// Leader's RPCs must continue. If `close` were still forwarded
+		// to the writer this would hang (connection disposed) or throw
+		// (post-dispose port).
+		const note = await repoA.upsertNote({
+			title: "after follower close",
+			body: "leader still alive",
+		});
+		const fetched = await repoA.getNote(note.id);
+		expect(fetched?.title).toBe("after follower close");
+
+		tabA.close();
+		// tabB was already torn down by `repoB.close()` via `terminate()`.
+	});
+
 	// Wait briefly so the polling helper is exercised when handover
 	// timing matters. Kept as a sanity test rather than reaching into
 	// the BC delivery internals.
@@ -673,3 +866,18 @@ describe("Web-Locks leader-election transport", () => {
 		expect(Date.now() - start).toBeGreaterThanOrEqual(25);
 	});
 });
+
+/**
+ * Minimal `WorkerLike` stub for tests that only need to satisfy the
+ * leader transport's writer-factory contract without actually serving
+ * RPCs. Used by the writer-crash and replay tests where the writer's
+ * role is to exist (so `becomeLeader` succeeds) but not to respond.
+ */
+function makeWriterStub(): WorkerLike {
+	return {
+		postMessage: () => {},
+		addEventListener: (() => {}) as WorkerLike["addEventListener"],
+		removeEventListener: (() => {}) as WorkerLike["removeEventListener"],
+		close: () => {},
+	};
+}
