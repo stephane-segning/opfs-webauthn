@@ -1043,6 +1043,98 @@ describe("Web-Locks leader-election transport", () => {
 		}
 	});
 
+	it("clears the pending pair-ack retry when promoted to leader", async () => {
+		// Round-3 fix: a tab that paired with a previous (now-vanished)
+		// leader armed `pendingPair` and started the 500ms `pair-request`
+		// retry timer. If that tab later wins the Web Lock and becomes
+		// leader itself, `becomeLeader` must clear the stale retry —
+		// otherwise the timer keeps re-posting `pair-request` envelopes
+		// for the dead leader onto the discovery channel forever,
+		// spamming late joiners and confusing peers.
+		//
+		// Setup: pre-occupy the lock via a direct `locks.request` so
+		// tab B is queued without any "real" leader tab also listening
+		// on the discovery channel (a blocker tab would race the ghost
+		// leader-elected with its own announce on tab B's `leader-query`
+		// probe). With no peer answering the probe, tab B's last-known
+		// leader is the ghost — exactly the handover-race state the fix
+		// must handle.
+		const db = await openDb();
+		const { worker: workerB } = makeWriter(db);
+		const locks = new FakeLockManager();
+		const channelSuffix = `clear-pending-${Math.random()}`;
+
+		// Hold the lock with a bare `locks.request` — no transport, no
+		// discovery participation. Releases via `locks.releaseHeld()`.
+		let releaseLock!: () => void;
+		const lockHeld = locks.request(
+			"opfs-db-writer",
+			{ mode: "exclusive" },
+			() =>
+				new Promise<void>((resolve) => {
+					releaseLock = resolve;
+				}),
+		);
+		void lockHeld;
+		// Yield so the FakeLockManager actually grants the lock to the
+		// bare requester before tab B queues behind it.
+		await new Promise((r) => setTimeout(r, 0));
+
+		// Tab B — queued behind the bare lock holder. No competing tab
+		// is on the discovery channel, so the only leader tab B will
+		// hear about is the ghost we inject below.
+		const tabB = createLeaderTransport(
+			makeDeps(channelSuffix, locks, "leaderB", () => workerB),
+		);
+
+		// Eavesdrop on the discovery channel from a separate BC. Same
+		// suffix-rewritten name the transport uses internally. Capture
+		// every `pair-request` so we can assert the post-promotion
+		// silence on the ghost id.
+		const spy = new BroadcastChannel(`opfs-leader-${channelSuffix}`);
+		const ghostPairRequests: Array<{ leaderId: string; at: number }> = [];
+		spy.addEventListener("message", (event) => {
+			const data = event.data as { kind?: string; leaderId?: string };
+			if (data?.kind === "pair-request" && data.leaderId === "ghost-leader") {
+				ghostPairRequests.push({
+					leaderId: data.leaderId,
+					at: Date.now(),
+				});
+			}
+		});
+
+		// Inject the ghost leader announcement. Tab B hears it via the
+		// discovery channel, calls `pairWithLeader("ghost-leader")`,
+		// arms `pendingPair`, and starts the 500ms retry. The ghost
+		// never acks, so the retry timer keeps firing.
+		spy.postMessage({ kind: "leader-elected", id: "ghost-leader" });
+
+		// Wait for at least one retry to fire (the initial post plus
+		// one timer-driven retry) so we know `pendingPair` is genuinely
+		// armed before promotion — sanity-check the setup.
+		await waitFor(() => ghostPairRequests.length >= 2, 1500);
+		expect(ghostPairRequests.length).toBeGreaterThanOrEqual(2);
+
+		try {
+			// Release the bare lock → tab B is granted → `becomeLeader`
+			// runs. The fix clears the stale `pendingPair` here.
+			releaseLock();
+			locks.releaseHeld();
+			await tabB.whenReady;
+
+			// Snapshot the count at promotion, then wait 700ms (> one
+			// PAIR_ACK_RETRY_MS) and assert no further ghost
+			// pair-requests appeared. If the fix regresses, the retry
+			// timer keeps firing and the count grows.
+			const countAtPromotion = ghostPairRequests.length;
+			await new Promise((r) => setTimeout(r, 700));
+			expect(ghostPairRequests.length).toBe(countAtPromotion);
+		} finally {
+			spy.close();
+			tabB.close();
+		}
+	});
+
 	// Wait briefly so the polling helper is exercised when handover
 	// timing matters. Kept as a sanity test rather than reaching into
 	// the BC delivery internals.

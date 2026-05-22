@@ -785,6 +785,14 @@ export function createLeaderTransport(deps: LeaderDeps): LeaderTransport {
 
 	const becomeLeader = (): void => {
 		if (closed) return;
+		// Clear any pending `pair-request` retry armed by an earlier
+		// `pairWithLeader` for the *previous* leader. This tab queued
+		// behind the Web Lock as a follower, started chasing the prior
+		// leader's pair-ack, and only now won promotion — without this
+		// clear, the 500ms retry timer keeps re-posting `pair-request`
+		// onto the discovery channel forever, spamming late joiners and
+		// confusing peers. Round-2 handover race.
+		clearPendingPair();
 		leaderId = deps.newLeaderId();
 		writer = deps.writerFactory();
 
