@@ -383,6 +383,150 @@ body {
 	color: var(--text-muted);
 }
 
+/*
+ * The preview surface mirrors the textarea's affordance — same min-height,
+ * same padding, same border — so flipping between modes doesn't shift the
+ * surrounding layout. It is a `<button>` for accessibility (keyboard focus,
+ * activation by Enter/Space) but visually a passive panel.
+ */
+.note-editor-preview {
+	appearance: none;
+	width: 100%;
+	min-height: 50vh;
+	background: var(--surface-card);
+	border: 1px solid var(--border-subtle);
+	border-radius: var(--radius-md);
+	padding: var(--space-3) var(--space-4);
+	font: inherit;
+	color: var(--text-primary);
+	text-align: left;
+	cursor: text;
+	transition: border-color var(--motion-medium);
+}
+
+.note-editor-preview:hover {
+	border-color: var(--border-strong);
+}
+
+.note-editor-preview:focus-visible {
+	outline: none;
+	border-color: var(--accent);
+	box-shadow: var(--focus-ring);
+}
+
+.note-editor-preview-empty {
+	color: var(--text-muted);
+}
+
+/*
+ * Typography for rendered markdown. Intentionally minimal: we reuse the
+ * design tokens that the rest of the app already ships so we don't drag
+ * in a typography library, and we only style elements the sanitizer
+ * actually emits. Anything not listed here inherits from the parent.
+ */
+.note-markdown {
+	font-family: var(--font-body);
+	line-height: 1.55;
+	color: var(--text-primary);
+}
+
+.note-markdown > :first-child {
+	margin-top: 0;
+}
+
+.note-markdown > :last-child {
+	margin-bottom: 0;
+}
+
+.note-markdown h1,
+.note-markdown h2,
+.note-markdown h3,
+.note-markdown h4,
+.note-markdown h5,
+.note-markdown h6 {
+	margin: var(--space-4) 0 var(--space-2);
+	font-weight: 600;
+	line-height: 1.25;
+}
+
+.note-markdown h1 {
+	font-size: 1.4rem;
+}
+
+.note-markdown h2 {
+	font-size: 1.2rem;
+}
+
+.note-markdown h3 {
+	font-size: 1.05rem;
+}
+
+.note-markdown h4,
+.note-markdown h5,
+.note-markdown h6 {
+	font-size: 1rem;
+}
+
+.note-markdown p {
+	margin: var(--space-2) 0;
+}
+
+.note-markdown ul,
+.note-markdown ol {
+	margin: var(--space-2) 0;
+	padding-left: var(--space-5);
+}
+
+.note-markdown li + li {
+	margin-top: var(--space-1, 0.25rem);
+}
+
+.note-markdown a {
+	color: var(--accent);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
+.note-markdown a:hover {
+	filter: brightness(1.1);
+}
+
+.note-markdown code {
+	font-family: var(--font-mono);
+	font-size: 0.9em;
+	padding: 0.1em 0.35em;
+	background: var(--surface-1, rgba(255, 255, 255, 0.06));
+	border-radius: var(--radius-sm, 4px);
+}
+
+.note-markdown pre {
+	margin: var(--space-3) 0;
+	padding: var(--space-3) var(--space-4);
+	background: var(--surface-1, rgba(255, 255, 255, 0.06));
+	border-radius: var(--radius-md);
+	overflow-x: auto;
+	line-height: 1.45;
+}
+
+.note-markdown pre code {
+	background: transparent;
+	padding: 0;
+	font-size: 0.875rem;
+}
+
+.note-markdown blockquote {
+	margin: var(--space-3) 0;
+	padding: 0 var(--space-4);
+	border-left: 3px solid var(--border-strong, var(--border-subtle));
+	color: var(--text-secondary);
+}
+
+.note-markdown hr {
+	border: 0;
+	border-top: 1px solid var(--border-subtle);
+	margin: var(--space-4) 0;
+}
+
 .note-editor-foot {
 	display: flex;
 	justify-content: space-between;

@@ -73,6 +73,7 @@
 			"share": "Share to another device",
 			"titleLabel": "Title",
 			"bodyLabel": "Body",
+			"editBody": "Edit body",
 			"titlePlaceholder": "Title",
 			"bodyPlaceholder": "Write something only you can read."
 		}

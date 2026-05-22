@@ -4,6 +4,8 @@ import type { Note } from "@opfs/storage";
 import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState } from "react";
 
+import { NoteMarkdown } from "./markdown";
+
 /**
  * Draft input local to the editor. `id` carries through on update;
  * absence means "new note", which the Repo turns into a fresh id.
@@ -45,6 +47,19 @@ export function NoteEditor({
 	const [draft, setDraft] = useState<Draft>(fromNote(note));
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// View mode picks between rendered-markdown ("preview") and the raw
+	// textarea ("edit"). We default to "preview" when opening an existing
+	// note — the PRD §Notes call for Markdown rendering — and to "edit"
+	// for a brand-new note where there's nothing to render. Tapping the
+	// preview switches to "edit"; this is the simpler UX that fits the
+	// existing single-column shape (a side-by-side split would crowd the
+	// 36rem max-width body on mobile, which is the primary form factor).
+	// The textarea remains the source of truth for `draft.body` either
+	// way; "preview" is render-only.
+	const [mode, setMode] = useState<"preview" | "edit">(
+		note ? "preview" : "edit",
+	);
+	const bodyRef = useRef<HTMLTextAreaElement | null>(null);
 	// A ref guards against double-submission within the same tick;
 	// React's `setBusy(true)` only disables the button on the next
 	// render, so the second click of a rapid pair would otherwise
@@ -55,7 +70,14 @@ export function NoteEditor({
 	useEffect(() => {
 		setDraft(fromNote(note));
 		setError(null);
+		setMode(note ? "preview" : "edit");
 	}, [note]);
+
+	// When the user opts into editing, drop them into the textarea so
+	// they don't have to tap a second time to start typing.
+	useEffect(() => {
+		if (mode === "edit") bodyRef.current?.focus();
+	}, [mode]);
 
 	const dirty = note
 		? draft.title !== note.title || draft.body !== note.body
@@ -116,14 +138,45 @@ export function NoteEditor({
 				type="text"
 				value={draft.title}
 			/>
-			<textarea
-				aria-label={t("editor.bodyLabel")}
-				className="note-editor-body"
-				disabled={busy}
-				onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
-				placeholder={t("editor.bodyPlaceholder")}
-				value={draft.body}
-			/>
+			{mode === "preview" ? (
+				// Whole region is a button so keyboard users get the same
+				// "tap to edit" affordance as a mouse user clicking the text.
+				// The empty-body case prints a hint so the preview isn't a
+				// silent dead zone.
+				<button
+					aria-label={t("editor.editBody")}
+					className="note-editor-preview"
+					disabled={busy}
+					onClick={() => setMode("edit")}
+					type="button"
+				>
+					{draft.body.trim() ? (
+						<div className="note-markdown">
+							<NoteMarkdown source={draft.body} />
+						</div>
+					) : (
+						<span className="note-editor-preview-empty">
+							{t("editor.bodyPlaceholder")}
+						</span>
+					)}
+				</button>
+			) : (
+				<textarea
+					aria-label={t("editor.bodyLabel")}
+					className="note-editor-body"
+					disabled={busy}
+					onBlur={() => {
+						// Returning to preview on blur only makes sense for an
+						// existing note — for a fresh draft the preview would be
+						// empty until the first save, defeating the point.
+						if (note) setMode("preview");
+					}}
+					onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
+					placeholder={t("editor.bodyPlaceholder")}
+					ref={bodyRef}
+					value={draft.body}
+				/>
+			)}
 			<div className="note-editor-foot">
 				{note && onShare ? (
 					<button
