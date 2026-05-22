@@ -89,18 +89,22 @@ describe("NoteEditor open-delete click handler", () => {
 	});
 
 	it("clears a stale `error` before opening the confirm dialog", async () => {
-		// Spy setters for each of NoteEditor's three useState slots, in
-		// declaration order: draft, busy, error, confirmingDelete.
+		// Spy setters for each of NoteEditor's useState slots, in
+		// declaration order: draft, busy, error, confirmingDelete, mode.
+		// `mode` (PR #48 markdown preview/edit toggle) was added to the
+		// component after this test; ordering here mirrors the source.
 		const setDraft = vi.fn();
 		const setBusy = vi.fn();
 		const setError = vi.fn();
 		const setConfirmingDelete = vi.fn();
+		const setMode = vi.fn();
 		const stalePriorError = "save failed: storage offline";
 		useStateMock
 			.mockImplementationOnce((init: unknown) => [init, setDraft])
 			.mockImplementationOnce(() => [false, setBusy])
 			.mockImplementationOnce(() => [stalePriorError, setError])
-			.mockImplementationOnce(() => [false, setConfirmingDelete]);
+			.mockImplementationOnce(() => [false, setConfirmingDelete])
+			.mockImplementationOnce(() => ["preview", setMode]);
 
 		// Import lazily so the `vi.mock("react", ...)` factory above has
 		// already replaced the hooks by the time the module is evaluated.

@@ -69,6 +69,8 @@
 			"region": "Note editor",
 			"cancel": "Cancel",
 			"save": "Save",
+			"edit": "Edit",
+			"preview": "Preview",
 			"archive": "Archive",
 			"delete": "Delete forever",
 			"share": "Share to another device",
