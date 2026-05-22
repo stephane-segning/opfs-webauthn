@@ -44,45 +44,17 @@ describe("NoteMarkdown", () => {
 	});
 
 	it("adds target=_blank and rel=noopener to external links", () => {
-		// We pin the renderer to a fixed origin so URL.origin comparison
-		// in the component is deterministic in tests.
-		const original = globalThis.window;
-		// jsdom isn't loaded; emulate the minimal shape react-markdown's
-		// link override reads (`window.location.href`).
-		(
-			globalThis as { window?: { location: { href: string; origin: string } } }
-		).window = {
-			location: {
-				href: "https://app.example/",
-				origin: "https://app.example",
-			},
-		};
-		try {
-			const out = render("[anthropic](https://anthropic.com)");
-			expect(out).toContain('href="https://anthropic.com"');
-			expect(out).toContain('target="_blank"');
-			expect(out).toContain('rel="noopener noreferrer"');
-		} finally {
-			(globalThis as { window?: unknown }).window = original;
-		}
+		const out = render("[anthropic](https://anthropic.com)");
+		expect(out).toContain('href="https://anthropic.com"');
+		expect(out).toContain('target="_blank"');
+		expect(out).toContain('rel="noopener noreferrer"');
 	});
 
-	it("does not open same-origin links in a new tab", () => {
-		const original = globalThis.window;
-		(
-			globalThis as { window?: { location: { href: string; origin: string } } }
-		).window = {
-			location: {
-				href: "https://app.example/",
-				origin: "https://app.example",
-			},
-		};
-		try {
-			const out = render("[home](https://app.example/notes)");
-			expect(out).not.toContain('target="_blank"');
-		} finally {
-			(globalThis as { window?: unknown }).window = original;
-		}
+	it("does not open path-relative links in a new tab", () => {
+		// Path-relative URLs are by definition same-origin, so they should
+		// open in the same tab regardless of where the page is mounted.
+		const out = render("[home](/notes)");
+		expect(out).not.toContain('target="_blank"');
 	});
 
 	it("treats protocol-relative URLs as external", () => {
@@ -90,29 +62,17 @@ describe("NoteMarkdown", () => {
 		// different host than any realistic same-origin location. The
 		// safer default — and the one the security review on PR #48
 		// asked for — is to open in a new tab with the noopener rel.
-		const original = globalThis.window;
-		(
-			globalThis as { window?: { location: { href: string; origin: string } } }
-		).window = {
-			location: {
-				href: "https://app.example/",
-				origin: "https://app.example",
-			},
-		};
-		try {
-			const out = render("[ext](//example.com/foo)");
-			expect(out).toContain('target="_blank"');
-			expect(out).toContain('rel="noopener noreferrer"');
-		} finally {
-			(globalThis as { window?: unknown }).window = original;
-		}
+		const out = render("[ext](//example.com/foo)");
+		expect(out).toContain('target="_blank"');
+		expect(out).toContain('rel="noopener noreferrer"');
 	});
 
-	it("renders identically on the server for absolute same-origin URLs", () => {
-		// SSR/CSR hydration guard. Without `window`, the link override
-		// returns `external = false`. The very first client paint also
-		// returns `false` for same-origin absolute URLs, so the two HTML
-		// strings must match — no hydration warning, no torn DOM.
+	it("renders identically on the server and the client (no hydration drift)", () => {
+		// `isExternalHref` is intentionally `window`-independent: the
+		// server and the client must produce byte-identical markup, or
+		// React will tear down the link subtree on hydration. We assert
+		// that property by running the renderer with and without `window`
+		// for an absolute URL — both must match.
 		const original = globalThis.window;
 		try {
 			// Server: no window.
@@ -121,7 +81,10 @@ describe("NoteMarkdown", () => {
 				<NoteMarkdown source="[home](https://app.example/notes)" />,
 			);
 
-			// Client: window with a same-origin location.
+			// Client: window with a same-origin location. Even though the
+			// URL is same-origin, we (now) classify it as external because
+			// we no longer compare against `window.location.origin` — that
+			// branch is what caused the hydration mismatch.
 			(
 				globalThis as {
 					window?: { location: { href: string; origin: string } };
@@ -137,26 +100,36 @@ describe("NoteMarkdown", () => {
 			);
 
 			expect(ssr).toBe(csr);
-			expect(ssr).not.toContain('target="_blank"');
 		} finally {
 			(globalThis as { window?: unknown }).window = original;
 		}
 	});
 
-	it("does not emit target=_blank during SSR (deterministic default)", () => {
+	it("emits target=_blank during SSR for absolute URLs (deterministic)", () => {
+		// The previous implementation suppressed `target` on SSR and
+		// added it on the client, which caused a hydration mismatch. The
+		// fix is to always classify absolute URLs as external regardless
+		// of where we are running. This test pins that contract.
 		const original = globalThis.window;
 		try {
 			(globalThis as { window?: unknown }).window = undefined;
 			const out = renderToStaticMarkup(
 				<NoteMarkdown source="[ext](https://anthropic.com)" />,
 			);
-			// Even though the URL *is* cross-origin, SSR returns the safe,
-			// origin-agnostic default. The client effect (or just the
-			// next client render in the React reconciliation) flips it.
-			expect(out).not.toContain('target="_blank"');
+			expect(out).toContain('target="_blank"');
+			expect(out).toContain('rel="noopener noreferrer"');
 		} finally {
 			(globalThis as { window?: unknown }).window = original;
 		}
+	});
+
+	it("does not forward the react-markdown `node` prop to the DOM", () => {
+		// react-markdown passes an internal mdast/hast `node` to custom
+		// renderers. The link override must strip it out — otherwise React
+		// warns "Unknown prop `node` on <a>" and the literal string
+		// `node="…"` ends up serialized into the HTML.
+		const out = render("[anthropic](https://anthropic.com)");
+		expect(out).not.toContain("node=");
 	});
 
 	it("does not run <script> in the source — the tag is dropped", () => {
@@ -205,6 +178,33 @@ describe("stripMarkdown", () => {
 		expect(stripMarkdown("**bold** and *italic* and _under_")).toBe(
 			"bold and italic and under",
 		);
+	});
+
+	it("preserves literal underscores inside identifiers (snake_case)", () => {
+		// The regex-based stripper used to eat the underscores in
+		// `snake_case_identifier` because it treated any `_…_` span as
+		// emphasis. The parser knows better — emphasis requires word
+		// boundaries, and a continuous identifier doesn't qualify.
+		expect(stripMarkdown("snake_case_identifier")).toBe(
+			"snake_case_identifier",
+		);
+	});
+
+	it("preserves literal asterisks used as multiplication", () => {
+		// Same failure mode: `2 * 3 * 4` was previously rewritten to
+		// `2 3 4` because the regex matched `* 3 *` as italic. CommonMark
+		// requires emphasis delimiters to flank a non-space character, so
+		// the parser leaves these alone.
+		expect(stripMarkdown("2 * 3 * 4")).toBe("2 * 3 * 4");
+	});
+
+	it("unwraps real emphasis even when the surrounding text looks code-like", () => {
+		// Mirror image of the previous two: where the markers really are
+		// emphasis, we must still strip them. Each input here is the
+		// minimal case for a span the parser will recognize.
+		expect(stripMarkdown("**bold**")).toBe("bold");
+		expect(stripMarkdown("*italic*")).toBe("italic");
+		expect(stripMarkdown("_underscore_")).toBe("underscore");
 	});
 
 	it("keeps link text, drops the URL", () => {

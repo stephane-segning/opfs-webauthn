@@ -37,8 +37,11 @@
  *    has already been validated.
  */
 
+import { toString as mdastToString } from "mdast-util-to-string";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
 
 /**
  * The shipped sanitizer schema. Built from `defaultSchema` (GitHub's
@@ -53,49 +56,44 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 const SANITIZE_SCHEMA = defaultSchema;
 
 /**
- * A href is "external" if it parses as an absolute URL with a different
- * origin than the document. Anchors (`#foo`) and same-origin relative
- * paths render in-place; only http(s) cross-origin links get the
- * new-tab treatment.
+ * A href is "external" if its syntactic shape is an absolute URL —
+ * `http://…`, `https://…`, or protocol-relative `//host/…`. Anchors
+ * (`#foo`) and path-relative URLs (`/foo`, `./foo`, `foo`) stay
+ * in-place.
  *
- * SSR safety: on the server we cannot know the document origin, so we
- * cannot decide externality without risking a hydration mismatch on
- * absolute same-origin URLs (e.g. the user pasted the full URL of a
- * page in this app). We default to `false` on the server and let the
- * client paint compute the correct value after mount. The first paint
- * is therefore "same-tab" for every absolute URL, which is a milder
- * surprise than React tearing the link element down because the server
- * said `target="_blank"` and the client disagrees.
+ * SSR-determinism contract: this function MUST return the same value
+ * on the server and on the client. The previous implementation branched
+ * on `typeof window`, which made absolute same-origin URLs internal on
+ * the server and (sometimes) external on the client — React treated
+ * that as a hydration mismatch and would recover by tearing down and
+ * rebuilding the link subtree.
  *
- * Protocol-relative URLs (`//example.com/foo`) are treated as external:
- * same-origin protocol-relative is uncommon and the safer default is to
- * open in a new tab with `rel="noopener noreferrer"`.
+ * The trade-off: we no longer compare against `window.location.origin`,
+ * so an absolute URL that happens to match this app's origin (e.g. the
+ * user pasted the full deployed URL of a page in this app) will get
+ * `target="_blank"` instead of opening in the same tab. That is a
+ * UX-acceptable false positive: the link still works, the user just
+ * ends up in a new tab. The alternative — a useEffect-driven upgrade —
+ * would jitter the link's target attribute right after first paint,
+ * which is the worse outcome.
  *
- * We swallow URL parse errors and treat the link as internal — the
- * sanitizer has already rejected any URL it considers unsafe, so a
- * value we can't parse here is either a fragment, a relative path, or
- * a mailto, none of which want `target="_blank"`.
+ * Protocol-relative URLs (`//example.com/foo`) are also treated as
+ * external. They inherit the page protocol but the host is different
+ * from the document origin in every realistic case, and the safer
+ * default is the new-tab behaviour with `rel="noopener noreferrer"`.
  */
 function isExternalHref(href: string | undefined): boolean {
 	if (!href) return false;
-	// SSR: stay deterministic. The client effect will upgrade the link
-	// after hydration. Returning `false` here matches the very first
-	// client paint, before window.location is read.
-	if (typeof window === "undefined") return false;
+	// Same-document anchor — never external.
 	if (href.startsWith("#")) return false;
-	// Protocol-relative (`//host/path`) — treat as external. Without an
-	// explicit scheme they inherit the page's, but the host is different
-	// from the document origin in every realistic case.
+	// Protocol-relative (`//host/path`).
 	if (href.startsWith("//")) return true;
-	// Path-relative (`/foo`, `./foo`, `foo`) is by definition same-origin.
-	if (href.startsWith("/")) return false;
-	try {
-		const url = new URL(href, window.location.href);
-		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-		return url.origin !== window.location.origin;
-	} catch {
-		return false;
-	}
+	// Path-relative (`/foo`, `./foo`, `../foo`, `foo`) — same-origin.
+	if (href.startsWith("/") || href.startsWith(".")) return false;
+	// Absolute http(s). Other schemes (mailto:, tel:, javascript: — the
+	// last of which the sanitizer already strips) are not "external" in
+	// the new-tab sense.
+	return /^https?:\/\//i.test(href);
 }
 
 /**
@@ -107,10 +105,16 @@ const MARKDOWN_COMPONENTS = {
 	a({
 		href,
 		children,
+		// `react-markdown` passes the mdast/hast node as a `node` prop to
+		// custom renderers. It is not a valid DOM attribute, so we destructure
+		// it out before spreading the rest onto the <a> element — otherwise
+		// React logs "Unknown prop `node` on <a> tag" in development.
+		node: _node,
 		...rest
 	}: {
 		readonly href?: string;
 		readonly children?: React.ReactNode;
+		readonly node?: unknown;
 	} & React.AnchorHTMLAttributes<HTMLAnchorElement>) {
 		const external = isExternalHref(href);
 		return (
@@ -153,37 +157,70 @@ export function NoteMarkdown({ source }: NoteMarkdownProps) {
 
 /**
  * Reduce a markdown source to a single-line plain-text preview, for use
- * in note cards where headings/bold/etc. are noise. We deliberately do
- * NOT run the full markdown pipeline here — list cards render many at
- * once and the parser cost would dominate. A regex pass is good enough
- * because:
- *  - the output is never injected as HTML — it lands inside a React
- *    text node, so a missed sanitization step here cannot become XSS;
- *  - the goal is "show the words, drop the syntax", not faithful
- *    rendering.
+ * in note cards where headings/bold/etc. are noise.
+ *
+ * Why a real parser and not a regex pass: an earlier version of this
+ * helper used regex to strip `*…*` / `_…_` emphasis markers. That
+ * mis-fires on perfectly normal prose — `snake_case_identifier` lost
+ * its underscores, `2 * 3 * 4` lost its asterisks, and any text that
+ * happened to contain two of those characters became gibberish. The
+ * correct fix is to ask the markdown parser whether a span is actually
+ * emphasis. We use the same `unified` + `remark-parse` pipeline that
+ * `react-markdown` already loads for the preview renderer, then walk
+ * the mdast tree with `mdast-util-to-string`, which by design returns
+ * the visible text content of every node — emphasis is unwrapped,
+ * literal underscores in code/text stay literal.
+ *
+ * The result is also dropped into a React text node, never re-injected
+ * as HTML, so a missed escape here cannot become XSS.
  */
+const PLAINTEXT_PROCESSOR = unified().use(remarkParse);
+
+// Minimal mdast node shape we care about — `mdast-util-to-string` and
+// `unified.parse` are loosely typed at the boundary, so we model only
+// the fields we read.
+type MdastLike = {
+	readonly type: string;
+	readonly children?: readonly MdastLike[];
+};
+
+/**
+ * Walk the parsed tree and join the visible text of each block-level
+ * node with a space, so adjacent paragraphs / list items / code blocks
+ * don't get smashed together (`mdast-util-to-string` concatenates with
+ * no separator). For inline nodes we fall through to the default
+ * stringifier — that correctly returns `snake_case` and `2 * 3 * 4`
+ * verbatim because emphasis is decided by the parser, not by regex.
+ */
+function blockTextSegments(node: MdastLike, out: string[]): void {
+	const children = node.children;
+	if (!children || children.length === 0) {
+		const text = mdastToString(node, {
+			includeImageAlt: false,
+			includeHtml: false,
+		});
+		if (text) out.push(text);
+		return;
+	}
+	// `root` and `list` are pure containers; their children are the
+	// block-level nodes we want to separate. For everything else (a
+	// paragraph, a heading, a list item, a code block) we let
+	// `mdast-util-to-string` produce the joined inline text in one shot.
+	if (node.type === "root" || node.type === "list") {
+		for (const child of children) blockTextSegments(child, out);
+		return;
+	}
+	const text = mdastToString(node, {
+		includeImageAlt: false,
+		includeHtml: false,
+	});
+	if (text) out.push(text);
+}
+
 export function stripMarkdown(source: string): string {
-	return (
-		source
-			// Fenced and inline code: keep the contents (without backticks).
-			.replace(/```[\s\S]*?```/g, (block) =>
-				block.replace(/^```\w*\n?|\n?```$/g, ""),
-			)
-			.replace(/`([^`]+)`/g, "$1")
-			// Images: drop entirely (alt text rarely reads well in a card).
-			.replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-			// Links: keep the visible text, drop the URL.
-			.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-			// ATX headings, blockquotes, list markers at line start.
-			.replace(/^\s{0,3}(#{1,6}\s+|>\s+|[-*+]\s+|\d+\.\s+)/gm, "")
-			// Bold/italic/strikethrough markers (non-greedy, balanced).
-			.replace(/(\*\*|__)(.*?)\1/g, "$2")
-			.replace(/(\*|_)(.*?)\1/g, "$2")
-			.replace(/~~(.*?)~~/g, "$1")
-			// Horizontal rules.
-			.replace(/^\s*[-*_]{3,}\s*$/gm, "")
-			// Collapse whitespace runs so the preview reads as one paragraph.
-			.replace(/\s+/g, " ")
-			.trim()
-	);
+	if (!source) return "";
+	const tree = PLAINTEXT_PROCESSOR.parse(source) as MdastLike;
+	const segments: string[] = [];
+	blockTextSegments(tree, segments);
+	return segments.join(" ").replace(/\s+/g, " ").trim();
 }
