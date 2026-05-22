@@ -39,6 +39,8 @@ export {
 	EnrollResult,
 	encodeRowId,
 	initSync,
+	Migration,
+	pendingMigrations,
 	protocolVersion,
 	RecipientHandle,
 	rowAad,

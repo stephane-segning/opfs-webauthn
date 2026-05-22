@@ -235,6 +235,59 @@ pub fn row_id_chars() -> u32 {
     opfs_repo::ROW_ID_CHARS as u32
 }
 
+/// A single forward-migration step.
+///
+/// JS-visible mirror of `opfs_repo::Migration`. The driver runs each
+/// entry's `upSql` as one transaction and stamps
+/// `schema_meta.version = toVersion` before moving to the next.
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct Migration {
+    /// Schema version this migration assumes is currently installed.
+    #[wasm_bindgen(readonly, js_name = fromVersion)]
+    pub from_version: u32,
+    /// Schema version reached after `upSql` runs.
+    #[wasm_bindgen(readonly, js_name = toVersion)]
+    pub to_version: u32,
+    up_sql: alloc::string::String,
+}
+
+#[wasm_bindgen]
+impl Migration {
+    /// SQL to apply for this step. Multiple statements separated by `;`.
+    #[wasm_bindgen(getter, js_name = upSql)]
+    #[must_use]
+    pub fn up_sql(&self) -> alloc::string::String {
+        self.up_sql.clone()
+    }
+}
+
+impl From<&opfs_repo::Migration> for Migration {
+    fn from(value: &opfs_repo::Migration) -> Self {
+        Self {
+            from_version: value.from_version,
+            to_version: value.to_version,
+            up_sql: value.up_sql.to_owned(),
+        }
+    }
+}
+
+/// Return the ordered list of migrations needed to bring a DB at
+/// `currentVersion` up to the binary's `schemaVersion()`.
+///
+/// - empty array — already current, no work.
+/// - non-empty — apply each entry's `upSql` in order; stamp
+///   `schema_meta.version = entry.toVersion` after each.
+/// - throws — `currentVersion` is unknown to this binary (typically
+///   a DB written by a newer build, or corrupt). The caller should
+///   refuse to proceed rather than write against an unknown schema.
+#[wasm_bindgen(js_name = pendingMigrations)]
+pub fn pending_migrations(current_version: u32) -> Result<Vec<Migration>, JsError> {
+    opfs_repo::pending_migrations(current_version)
+        .map(|slice| slice.iter().map(Migration::from).collect())
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// The opened vault. Holds the in-memory DEK; never exposes it to JS.
 /// Drop semantics zeroize the DEK.
 #[wasm_bindgen]
