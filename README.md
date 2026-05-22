@@ -7,7 +7,7 @@
 WebAuthn passkey with the PRF extension; storage is SQLite over OPFS;
 crypto and DB row codec live in Rust compiled to WebAssembly.
 
-Live: **<https://ocs.vaam.store>**
+Live: **<http://opfs-web-opfs--sls.ssegning.com>**
 
 > [!IMPORTANT]
 > WebAuthn passkeys are bound to the hostname they were enrolled on
