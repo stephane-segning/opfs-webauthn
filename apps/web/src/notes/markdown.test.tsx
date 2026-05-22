@@ -11,7 +11,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { NoteMarkdown, stripMarkdown } from "./markdown";
+import {
+	__getStripMarkdownParseCallsForTests,
+	__resetStripMarkdownCacheForTests,
+	NoteMarkdown,
+	stripMarkdown,
+} from "./markdown";
 
 function render(source: string): string {
 	return renderToStaticMarkup(<NoteMarkdown source={source} />);
@@ -230,5 +235,56 @@ describe("stripMarkdown", () => {
 	it("returns an empty string for an empty input", () => {
 		expect(stripMarkdown("")).toBe("");
 		expect(stripMarkdown("   \n   ")).toBe("");
+	});
+
+	it("separates blocks inside list items and blockquotes (regression)", () => {
+		// Before the block-container fix, `mdastToString` concatenated a
+		// list item's child paragraphs with no separator, so a two-item
+		// list rendered as one smashed-together word, and a blockquote
+		// with two paragraphs lost the boundary between them. The fix
+		// recognises `listItem` and `blockquote` as block containers so
+		// each child block gets the same `" "` separator the top-level
+		// loop uses.
+		expect(stripMarkdown("- foo bar\n- baz qux")).toBe("foo bar baz qux");
+		expect(stripMarkdown("> hello\n>\n> world")).toBe("hello world");
+		// The full bar from the task brief: lists and blockquotes mixed
+		// in one document must collapse to single-spaced text.
+		expect(stripMarkdown("- alpha\n- beta\n\n> hello\n> world")).toBe(
+			"alpha beta hello world",
+		);
+	});
+});
+
+describe("stripMarkdown caching", () => {
+	it("only parses the source once for repeated identical inputs", () => {
+		// The cache is the load-bearing fix for the per-keystroke
+		// re-render thrash in `note-card`: two `stripMarkdown` calls per
+		// visible card per keystroke runs the unified pipeline dozens of
+		// times per frame without it. We assert the property directly
+		// via the parse-call counter — 1000 calls with the same input
+		// must hit the parser exactly once.
+		__resetStripMarkdownCacheForTests();
+		const SAME_INPUT = "# Title\n\nBody with **bold** and a [link](/x).";
+		for (let i = 0; i < 1000; i += 1) stripMarkdown(SAME_INPUT);
+		expect(__getStripMarkdownParseCallsForTests()).toBe(1);
+	});
+
+	it("parses each distinct input at most once", () => {
+		__resetStripMarkdownCacheForTests();
+		const inputs = ["# one", "# two", "# three"];
+		// Three distinct inputs, each repeated ten times → three parses.
+		for (let i = 0; i < 10; i += 1) {
+			for (const input of inputs) stripMarkdown(input);
+		}
+		expect(__getStripMarkdownParseCallsForTests()).toBe(inputs.length);
+	});
+
+	it("returns the same value cached or uncached", () => {
+		__resetStripMarkdownCacheForTests();
+		const input = "- a\n- b\n\n> c\n> d";
+		const first = stripMarkdown(input);
+		const second = stripMarkdown(input);
+		expect(second).toBe(first);
+		expect(__getStripMarkdownParseCallsForTests()).toBe(1);
 	});
 });

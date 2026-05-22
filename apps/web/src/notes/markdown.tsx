@@ -191,7 +191,25 @@ type MdastLike = {
  * no separator). For inline nodes we fall through to the default
  * stringifier — that correctly returns `snake_case` and `2 * 3 * 4`
  * verbatim because emphasis is decided by the parser, not by regex.
+ *
+ * The container set covers every mdast node whose children are
+ * themselves block-level: `root` holds the document's top-level blocks,
+ * `list` holds list items, and `listItem` / `blockquote` each hold one
+ * or more paragraphs (and possibly nested lists). If we stopped at
+ * `root`/`list`, calling `mdastToString` on a `listItem` would smash
+ * its child paragraphs together with no separator — so e.g. a list of
+ * two items "foo bar" / "baz qux" became "foo barbaz qux", and a
+ * blockquote with two paragraphs ran them together. Walking into these
+ * containers and joining with the same `" "` separator the top-level
+ * loop uses keeps multi-block content readable.
  */
+const BLOCK_CONTAINER_TYPES = new Set([
+	"root",
+	"list",
+	"listItem",
+	"blockquote",
+]);
+
 function blockTextSegments(node: MdastLike, out: string[]): void {
 	const children = node.children;
 	if (!children || children.length === 0) {
@@ -202,11 +220,11 @@ function blockTextSegments(node: MdastLike, out: string[]): void {
 		if (text) out.push(text);
 		return;
 	}
-	// `root` and `list` are pure containers; their children are the
-	// block-level nodes we want to separate. For everything else (a
-	// paragraph, a heading, a list item, a code block) we let
-	// `mdast-util-to-string` produce the joined inline text in one shot.
-	if (node.type === "root" || node.type === "list") {
+	// Pure block containers: recurse so each block child becomes its own
+	// segment, separated by the join below. For leaf block nodes (a
+	// paragraph, a heading, a code block) we let `mdast-util-to-string`
+	// produce the joined inline text in one shot.
+	if (BLOCK_CONTAINER_TYPES.has(node.type)) {
 		for (const child of children) blockTextSegments(child, out);
 		return;
 	}
@@ -217,10 +235,84 @@ function blockTextSegments(node: MdastLike, out: string[]): void {
 	if (text) out.push(text);
 }
 
-export function stripMarkdown(source: string): string {
-	if (!source) return "";
+/**
+ * LRU cache for `stripMarkdown` results, keyed by the input source.
+ *
+ * Why this exists: `note-card` calls `stripMarkdown` twice per visible
+ * card (title + excerpt) on every re-render, and the notes list
+ * re-renders on every keystroke in the search box. Each call runs the
+ * full unified/remark-parse pipeline, which is the heaviest piece of
+ * the markdown stack. Dozens of cards * two parses * a keystroke per
+ * frame thrashes the parser; the typed text and the rendered cards
+ * are both stable strings, so we get an excellent hit rate from a
+ * straight identity cache.
+ *
+ * Why a Map and not a WeakMap: keys are strings (the source body).
+ * Why an LRU cap: notes can be long and there is no upper bound on
+ * how many distinct bodies a session sees, so we cap to keep memory
+ * predictable. 200 entries comfortably covers the visible window of
+ * cards plus the currently-open note's title/body, with headroom for
+ * scroll churn. Insertion-order iteration on `Map` makes the oldest
+ * key the first one returned by `keys().next()`, so eviction is O(1).
+ */
+const STRIP_CACHE = new Map<string, string>();
+// why: bound the cache so a long session that touches many distinct
+// note bodies cannot grow the heap unboundedly. 200 entries is well
+// above any realistic on-screen-cards-plus-open-note working set.
+const STRIP_CACHE_CAP = 200;
+
+// Parse invocation counter — incremented every time we actually hit the
+// unified pipeline. Tests assert this stays at 1 across repeated calls
+// with the same input, which is the load-bearing property of the cache.
+// Production code never reads this; it costs one integer increment per
+// cache miss.
+let stripParseCalls = 0;
+
+function stripMarkdownUncached(source: string): string {
+	stripParseCalls += 1;
 	const tree = PLAINTEXT_PROCESSOR.parse(source) as MdastLike;
 	const segments: string[] = [];
 	blockTextSegments(tree, segments);
 	return segments.join(" ").replace(/\s+/g, " ").trim();
+}
+
+export function stripMarkdown(source: string): string {
+	if (!source) return "";
+	const cached = STRIP_CACHE.get(source);
+	if (cached !== undefined) {
+		// LRU bump: re-insert so this key moves to the most-recent slot.
+		STRIP_CACHE.delete(source);
+		STRIP_CACHE.set(source, cached);
+		return cached;
+	}
+	const result = stripMarkdownUncached(source);
+	STRIP_CACHE.set(source, result);
+	if (STRIP_CACHE.size > STRIP_CACHE_CAP) {
+		// Evict the oldest entry (Map iterates in insertion order).
+		const oldest = STRIP_CACHE.keys().next().value;
+		if (oldest !== undefined) STRIP_CACHE.delete(oldest);
+	}
+	return result;
+}
+
+/**
+ * Test-only: clear the strip cache. Exported so tests that spy on
+ * `unified().parse(...)` or assert cache behaviour can start from a
+ * known-empty state. Not part of the public surface — call sites in
+ * the app never need to invalidate the cache because cached values
+ * are pure functions of the input string.
+ */
+export function __resetStripMarkdownCacheForTests(): void {
+	STRIP_CACHE.clear();
+	stripParseCalls = 0;
+}
+
+/**
+ * Test-only: number of times the unified parse pipeline has been
+ * invoked since the last cache reset. The cache is correct iff this
+ * counter equals the number of *distinct* inputs seen (capped at
+ * STRIP_CACHE_CAP per eviction wave).
+ */
+export function __getStripMarkdownParseCallsForTests(): number {
+	return stripParseCalls;
 }
